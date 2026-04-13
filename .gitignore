@@ -39,4 +39,62 @@ oldest-requirements.txt
 jupyterhub-proxy.pid
 examples/server-api/service-token
 
+
+# =========================
+# Python virtual environment
+# =========================
+saiep-venv/
+venv/
+env/
+
+# =========================
+# Prometheus
+# =========================
+prometheus/
+prometheus-data/
+*.prom
+*.tsdb
+prometheus-2.52.0.linux-amd64/
+# Prometheus full distribution
+prometheus-2.52.0.linux-amd64/
+prometheus/
+prometheus-data/
+*.tar.gz
+*.wal
+*.db
+# =========================
+# Grafana
+# =========================
+grafana/
+grafana-data/
+*.db
+
+# =========================
+# Python cache files
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Jupyter Notebook checkpoints
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Environment variables
+# =========================
+.env
 *.hot-update*
