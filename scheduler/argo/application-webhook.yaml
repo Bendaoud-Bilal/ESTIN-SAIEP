@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webhook
+  namespace: argocd
+spec:
+  project: saiep
+
+  source:
+    repoURL: https://github.com/Bendaoud-Bilal/ESTIN-SAIEP
+    targetRevision: main
+    path: webhook
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: webhook
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

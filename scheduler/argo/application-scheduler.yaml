@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: scheduler
+  namespace: argocd
+spec:
+  project: saiep
+
+  source:
+    repoURL: https://github.com/Bendaoud-Bilal/ESTIN-SAIEP
+    targetRevision: main
+    path: scheduler/helm/scheduler
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: scheduler
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: saiep
+  namespace: argocd
+spec:
+  description: SAIEP GitOps Platform
+
+  sourceRepos:
+    - https://github.com/Bendaoud-Bilal/ESTIN-SAIEP
+    - https://jupyterhub.github.io/helm-chart
+
+  destinations:
+    - namespace: "*"
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"

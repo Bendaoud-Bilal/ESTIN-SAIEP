@@ -1,0 +1,4 @@
+log_level: INFO
+schedule_interval: 10s
+max_workers: 5
+retry_policy: exponential
