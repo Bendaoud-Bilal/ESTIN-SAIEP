@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: saiep-cpu-job
+  namespace: default
+spec:
+  entrypoint: main
+  # Binds to the PriorityClass
+  podPriorityClassName: batch-tier
+  templates:
+  - name: main
+    inputs:
+      parameters:
+      - name: code_payload
+    container:
+      image: jupyter/scipy-notebook:latest
+      command: ["python", "-c"]
+      args: ["{{inputs.parameters.code_payload}}"]
+      # Resources and SecurityContext are intentionally omitted here.
+      # The MutatingAdmissionWebhook will automatically inject them based on the Sizing Form!

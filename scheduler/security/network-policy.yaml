@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-cross-namespace
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector: {} # Allow traffic from pods in the SAME namespace only
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8     # Block internal cluster IP ranges (adjust to your CNI)
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443          # Allow outbound HTTPS to the internet for dataset downloads
+    - protocol: TCP
+      port: 80           # Allow outbound HTTP

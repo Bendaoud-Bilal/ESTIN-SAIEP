@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saiep-webhook
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: saiep-webhook
+  template:
+    metadata:
+      labels:
+        app: saiep-webhook
+    spec:
+      containers:
+      - name: webhook
+        image: saiep-webhook:latest # Replace with your registry image
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8443
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: saiep-webhook-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saiep-webhook-svc
+  namespace: default
+spec:
+  ports:
+  - port: 443
+    targetPort: 8443
+  selector:
+    app: saiep-webhook

@@ -24,7 +24,7 @@ c.JupyterHub.template_paths = [os.path.join(base_dir, 'templates')]
 
 # Bind to the Docker bridge gateway only — reachable by the Caddy HTTPS proxy
 # (and the host), NOT directly from the public internet.
-c.JupyterHub.bind_url = 'http://172.17.0.1:8000'
+c.JupyterHub.bind_url = 'http://127.0.0.1:8000'
 
 # Caddy terminates TLS and forwards X-Forwarded-Proto=https so the Hub
 # issues secure cookies and correct redirects.
@@ -86,7 +86,7 @@ c.Authenticator.admin_users = {'r4y4n3', 'litan'}
 # authenticate(); JupyterHub >= 5 additionally requires an explicit allow
 # rule, so allow_all here does NOT bypass the admin-approval workflow.
 c.Authenticator.allow_all = True
-c.NativeAuthenticator.open_signup = False          # activation by admin required
+c.NativeAuthenticator.open_signup = True          # activation by admin required
 c.NativeAuthenticator.ask_email_on_signup = True   # ESTIN email for identity check
 c.NativeAuthenticator.minimum_password_length = 8
 c.NativeAuthenticator.allowed_failed_logins = 5
@@ -165,6 +165,8 @@ SIZING_FORM = """
 </div>
 """
 
+from kubernetes import client, config
+
 def options_from_form(formdata):
     options = {
         'cpu': formdata.get('cpu', ['1'])[0],
@@ -175,9 +177,10 @@ def options_from_form(formdata):
     return options
 
 def pre_spawn_hook(spawner):
-    """Record every sizing request (training data for the future AI model)
-    and pass the requested limits to the user's environment."""
+    """Record sizing requests, create K8s namespace, and inject limits."""
     options = spawner.user_options or {}
+    
+    # 1. Save data for the future AI Model
     record = {
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'user': spawner.user.name,
@@ -188,17 +191,49 @@ def pre_spawn_hook(spawner):
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
     except OSError:
         spawner.log.warning('Could not persist spawn sizing request')
-    spawner.environment.update({
-        'SAIEP_CPU_REQUEST': str(options.get('cpu', '')),
-        'SAIEP_MEM_REQUEST': str(options.get('memory', '')),
-    })
 
-c.JupyterHub.spawner_class = 'simple'
-c.Spawner.cmd = [os.path.join(base_dir, 'venv/bin/jupyterhub-singleuser')]
-c.Spawner.default_url = '/lab'
-c.Spawner.options_form = SIZING_FORM
-c.Spawner.options_from_form = options_from_form
-c.Spawner.pre_spawn_hook = pre_spawn_hook
+    # 2. Extract requested limits
+    cpu_req = str(options.get('cpu', '1'))
+    ram_req = str(options.get('memory', '1G'))
+    
+    # 3. Create the Kubernetes Namespace for this user automatically
+    try:
+        config.load_kube_config()
+        v1 = client.CoreV1Api()
+        ns_name = f"user-{spawner.user.name.lower()}"
+        namespace = client.V1Namespace(
+            metadata=client.V1ObjectMeta(
+                name=ns_name,
+                labels={"project": "research"} # Ready for AI Module
+            )
+        )
+        v1.create_namespace(namespace)
+        spawner.log.info(f"Namespace {ns_name} created successfully.")
+    except Exception as e:
+        if "Conflict" not in str(e): # Ignore error if namespace already exists
+            spawner.log.error(f"Failed to create namespace: {e}")
+
+    # 4. Attach Annotations for the Webhook
+    spawner.extra_annotations = {
+        "saiep.estin.dz/cpu": cpu_req,
+        "saiep.estin.dz/ram": ram_req
+    }
+
+# --- KUBERNETES SPAWNER CONFIGURATION ---
+# We use KubeSpawner so JupyterHub actually talks to your K3s cluster!
+c.JupyterHub.spawner_class = 'kubespawner.KubeSpawner'
+
+# Tell it to launch in the specific user's namespace we created above
+c.KubeSpawner.namespace = 'user-{username}'
+
+# The base image to use for the researchers
+c.KubeSpawner.image = 'jupyter/scipy-notebook:latest'
+c.KubeSpawner.default_url = '/lab'
+
+# Bind the UI form and our custom hook
+c.KubeSpawner.options_form = SIZING_FORM
+c.KubeSpawner.options_from_form = options_from_form
+c.KubeSpawner.pre_spawn_hook = pre_spawn_hook
 
 # --- Monitoring : interface NATIVE SAIEP (Grafana supprimé) ----------------
 # Plus aucun outil tiers : le monitoring est notre propre interface

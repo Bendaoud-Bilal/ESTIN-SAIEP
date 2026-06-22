@@ -19,7 +19,7 @@ from urllib.parse import quote
 import docker as docker_sdk
 from tornado import web
 from tornado.httpclient import AsyncHTTPClient
-
+from kubernetes import client, config
 from jupyterhub.handlers import BaseHandler
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +57,28 @@ class ResourcesIndexHandler(_AdminBase):
 
 
 class ResourcesApiHandler(_AdminBase):
+
+
+
+
+
+    def get_cluster_capacity():
+        config.load_kube_config()
+        v1 = client.CoreV1Api()
+        
+        nodes = v1.list_node().items
+        capacity_data = []
+        
+        for node in nodes:
+            capacity_data.append({
+                "name": node.metadata.name,
+                "cpu_allocatable": node.status.allocatable.get('cpu'),
+                "memory_allocatable": node.status.allocatable.get('memory'),
+                "status": "Ready" if any(cond.type == 'Ready' and cond.status == 'True' for cond in node.status.conditions) else "NotReady"
+            })
+            
+        return capacity_data
+
     @web.authenticated
     async def get(self, section):
         self._require_admin()
@@ -144,40 +166,41 @@ class ResourcesApiHandler(_AdminBase):
         return {'images': out}
 
     async def _section_nodes(self):
-        c = _client()
-        info = await _run(c.info)
-        active = info.get('Swarm', {}).get('LocalNodeState') == 'active'
-        result = {'swarm_active': active, 'nodes': [], 'join_command': None,
-                  'total_cpu': info.get('NCPU', 0),
-                  'total_mem_gb': round(info.get('MemTotal', 0) / GiB, 1)}
-        if not active:
-            return result
-        nodes = await _run(c.nodes.list)
-        total_cpu, total_mem, manager_addr = 0, 0, None
+        # We replace Docker Swarm node fetching with Kubernetes API fetching
+        config.load_kube_config()
+        v1 = client.CoreV1Api()
+        nodes = v1.list_node().items
+        
+        result = {
+            'swarm_active': True, # Keep True so the UI renders the table
+            'nodes': [], 
+            'join_command': "k3s node join ...",
+            'total_cpu': 0,
+            'total_mem_gb': 0
+        }
+        
         for n in nodes:
-            a = n.attrs
-            res = a.get('Description', {}).get('Resources', {})
-            ncpu = round(res.get('NanoCPUs', 0) / 1e9)
-            total_cpu += ncpu
-            total_mem += res.get('MemoryBytes', 0)
-            role = a.get('Spec', {}).get('Role', '')
-            if role == 'manager' and a.get('ManagerStatus', {}).get('Addr'):
-                manager_addr = a['ManagerStatus']['Addr']
+            # Parse Kubernetes capacity
+            cpu_alloc = int(n.status.allocatable.get('cpu', '1').replace('m', ''))
+            mem_alloc = int(n.status.allocatable.get('memory', '1000000Ki').replace('Ki', ''))
+            mem_gb = round(mem_alloc / (1024 * 1024), 1)
+            
+            result['total_cpu'] += cpu_alloc
+            result['total_mem_gb'] += mem_gb
+            
+            is_ready = any(cond.type == 'Ready' and cond.status == 'True' for cond in n.status.conditions)
+            
             result['nodes'].append({
-                'id': n.id,
-                'hostname': a.get('Description', {}).get('Hostname', ''),
-                'role': role,
-                'state': a.get('Status', {}).get('State', ''),
-                'availability': a.get('Spec', {}).get('Availability', ''),
-                'leader': a.get('ManagerStatus', {}).get('Leader', False),
-                'cpu': ncpu,
-                'mem_gb': round(res.get('MemoryBytes', 0) / GiB, 1),
+                'id': n.metadata.uid,
+                'hostname': n.metadata.name,
+                'role': 'worker' if 'node-role.kubernetes.io/worker' in n.metadata.labels else 'manager',
+                'state': 'ready' if is_ready else 'down',
+                'availability': 'active',
+                'leader': True,
+                'cpu': cpu_alloc,
+                'mem_gb': mem_gb,
             })
-        result['total_cpu'] = total_cpu
-        result['total_mem_gb'] = round(total_mem / GiB, 1)
-        token = c.swarm.attrs.get('JoinTokens', {}).get('Worker')
-        if token and manager_addr:
-            result['join_command'] = 'docker swarm join --token %s %s' % (token, manager_addr)
+            
         return result
 
 

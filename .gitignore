@@ -11,6 +11,9 @@ share/jupyterhub/static/css/style.min.css
 share/jupyterhub/static/css/style.min.css.map
 share/jupyterhub/static/js/admin-react.js
 share/jupyterhub/static/js/admin-react.js.LICENSE.txt
+tls.crt
+tls.key
+ca_bundle_base64.txt
 
 # --- SAIEP deployment: secrets, user data, runtime artifacts (do not commit) ---
 secrets.env

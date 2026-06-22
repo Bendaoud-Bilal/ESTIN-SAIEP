@@ -15,6 +15,7 @@ from ..utils import maybe_future
 from .base import BaseHandler
 
 
+
 class LogoutHandler(BaseHandler):
     """Log a user out by clearing their login cookie."""
 
@@ -95,6 +96,8 @@ class LogoutHandler(BaseHandler):
 
 class LoginHandler(BaseHandler):
     """Render the login page."""
+
+
 
     def render_template(self, name, **ns):
         # intercept error page rendering for form submissions
