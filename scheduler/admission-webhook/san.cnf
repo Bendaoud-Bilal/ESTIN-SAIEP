@@ -1,0 +1,18 @@
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = saiep-webhook-svc.default.svc
+
+[v3_req]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = saiep-webhook-svc
+DNS.2 = saiep-webhook-svc.default
+DNS.3 = saiep-webhook-svc.default.svc
+DNS.4 = saiep-webhook-svc.default.svc.cluster.local

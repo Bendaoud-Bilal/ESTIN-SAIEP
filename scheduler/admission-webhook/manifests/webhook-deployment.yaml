@@ -12,6 +12,7 @@ spec:
     metadata:
       labels:
         app: saiep-webhook
+        webhook.saiep/ignore: "true"
     spec:
       containers:
       - name: webhook

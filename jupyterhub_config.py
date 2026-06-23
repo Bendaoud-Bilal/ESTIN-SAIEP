@@ -21,6 +21,7 @@ INTERNAL_HUB_URL = 'http://172.17.0.1:8000'
 PROMETHEUS_TOKEN = os.environ['SAIEP_PROMETHEUS_TOKEN']
 
 c.JupyterHub.template_paths = [os.path.join(base_dir, 'templates')]
+c.JupyterHub.static_paths = [os.path.join(base_dir, 'static')]
 
 # Bind to the Docker bridge gateway only — reachable by the Caddy HTTPS proxy
 # (and the host), NOT directly from the public internet.
@@ -201,6 +202,7 @@ def pre_spawn_hook(spawner):
         config.load_kube_config()
         v1 = client.CoreV1Api()
         ns_name = f"user-{spawner.user.name.lower()}"
+        spawner.namespace = ns_name
         namespace = client.V1Namespace(
             metadata=client.V1ObjectMeta(
                 name=ns_name,
@@ -223,8 +225,7 @@ def pre_spawn_hook(spawner):
 # We use KubeSpawner so JupyterHub actually talks to your K3s cluster!
 c.JupyterHub.spawner_class = 'kubespawner.KubeSpawner'
 
-# Tell it to launch in the specific user's namespace we created above
-c.KubeSpawner.namespace = 'user-{username}'
+
 
 # The base image to use for the researchers
 c.KubeSpawner.image = 'jupyter/scipy-notebook:latest'

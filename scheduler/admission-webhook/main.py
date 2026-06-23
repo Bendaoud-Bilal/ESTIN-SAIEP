@@ -25,8 +25,7 @@ async def mutate_pod(request: Request):
     cpu_request = annotations.get("saiep.estin.dz/cpu", "1")
     mem_request = annotations.get("saiep.estin.dz/ram", "2Gi")
     
-    # 2. Inject RuntimeClass for the Isolator tier (gVisor)
-    modified_pod["spec"]["runtimeClassName"] = "gvisor-sandbox"
+
     
     # 3. Apply Resource Limits and SecurityContext to all containers
     for container in modified_pod["spec"].get("containers", []):
