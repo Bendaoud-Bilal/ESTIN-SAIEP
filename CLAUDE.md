@@ -8,12 +8,12 @@ ESTIN-SAIEP is a **fork of JupyterHub** (upstream `jupyterhub/` package, `jsx/` 
 
 ## Commands
 
-Requirements: Python 3.12, Node 20, `configurable-http-proxy` (`npm i -g`).
+Requirements: Python 3.12, Node 20, Docker + kind/kubectl for the cluster layers, `configurable-http-proxy` (`npm i -g`).
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
-pip install jupyterlab notebook Pillow        # plus nativeauthenticator, docker (imported by the SAIEP config)
+pip install jupyterlab notebook Pillow jupyterhub-nativeauthenticator docker kubernetes rich pyyaml
 bash setup_ui.sh                              # SAIEP branding patch (favicons, JupyterLab CSS/title) — rerun after reinstalling venv
 ```
 
@@ -25,7 +25,10 @@ bash setup_ui.sh                              # SAIEP branding patch (favicons, 
 - Docs: `nox -s docs` or `make -C docs html`.
 - Lint/format: `pre-commit run --all-files` (`.pre-commit-config.yaml`).
 
-There are no tests for the SAIEP layer (`saiep_admin.py`, `jupyterhub_config.py`).
+- SAIEP tests: `./venv/bin/python -m pytest saiep_scheduler scheduler/webhook saiep_cli` (no cluster needed). `saiep_admin.py`/`saiep_jobs.py` handlers have no unit tests.
+- Cluster console: `python -m saiep_cli` (Rich menu; `--dry-run` prints commands). Option 3 creates a kind (dev) or kubeadm cluster and deploys the SAIEP stack; 12 writes the hub kubeconfig + env lines for `secrets.env`. State, TLS certs and kubeconfig live in `~/.saiep` (`SAIEP_HOME`).
+- Local hub against that cluster (dummy auth, jobs page): `SAIEP_DEV_PASSWORD=… SAIEP_KUBECONFIG=~/.saiep/hub-kubeconfig ./venv/bin/jupyterhub -f testing/jupyterhub_config_saiep.py`.
+- Webhook image (dev): `docker build -t saiep/admission-webhook:dev scheduler/webhook && kind load docker-image saiep/admission-webhook:dev --name saiep`, then `kubectl -n saiep-system rollout restart deploy/saiep-admission`.
 
 ## SAIEP architecture
 
@@ -40,24 +43,25 @@ There are no tests for the SAIEP layer (`saiep_admin.py`, `jupyterhub_config.py`
 
 **Branding/UI:** `templates/` overrides JupyterHub Jinja templates (loaded via `template_paths`); `static/` holds the landing page and admin SPA. UI copy is French.
 
-## Target architecture (design docs, mostly not implemented)
+## Scheduling + Isolator layers (Kubernetes)
 
-Design sources live outside the repo in `../ESTIN SAIEP files/` (`review and modify based on the advancement/new_arch.md`, `Scheduler/scheduler_architecture_v2.txt`, `Scheduler/scheduler_tech_study_v2.txt`, `Scheduler/apraoch-to-apply-k8s.txt`). Files with "not to work with" in the name are obsolete. Layer pipeline: **User Interface → Access Gateway → Scheduler → Isolator**, wrapped by a Security Layer and Monitoring/AI-Optimization/Storage.
+Design sources live outside the repo in `../ESTIN SAIEP files/`. The adjusted, authoritative scheduler design is `Scheduler/apraoch-to-apply-k8s.txt` ("Path 2", batch-only); it wins over `scheduler_architecture_v2.txt` where they conflict. Files with "not to work with" in the name are obsolete. See `scheduler/README.md` and `isolator/README.md`.
 
-Scheduler decisions (latest, batch-only "Path 2"):
-- **Every execution request enters through Argo Workflows** (WorkflowTemplates for CPU/GPU jobs; plain stateless Pods/Jobs, no StatefulSets). No KubeSpawner / JupyterHub-direct interactive pod path.
-- Admission happens **before** scheduling: custom validating/mutating webhook (quota check, image allowlist, LimitRange default injection) + Kyverno policies.
-- Priority/queueing = `PriorityClass` (Batch 500, Background 100) + Argo namespace parallelism; Services are for networking only, never scheduling.
-- Placement = native kube-scheduler; the AI optimization module is an optional advisory step (2 s timeout) and must be a no-op stub until a model exists.
-- One namespace per user or project (undecided — decide once), each with `ResourceQuota` + `LimitRange`.
-- Isolation is the Isolator's job: scheduler only passes a label; `RuntimeClass` (gVisor/Kata) + per-namespace `NetworkPolicy` + Falco enforce it.
-- Cluster: single kubeadm cluster; a machine = a node; GPU capability is a label (`gpu=true`) applied at join. ArgoCD (GitOps) delivers all of the above YAML.
-- A planned product CLI (`../ESTIN SAIEP files/cli_support.txt`): ASCII-banner + Rich interactive menu for installing/verifying k8s, creating/running/stopping the cluster and node containers, and uninstalling.
+Request path: `/hub/jobs` (`saiep_jobs.py`) → `saiep_scheduler` provisions `saiep-u-<user>` (one namespace per user) → creates an Argo `Workflow` referencing ClusterWorkflowTemplate `saiep-cpu-job`/`saiep-gpu-job` → Argo `namespaceParallelism` queues per user → pod admission (LimitRange, `saiep-admission` mutate/validate webhook, ResourceQuota, Pod Security `restricted`) → kube-scheduler (PriorityClass, `gpu=true` nodes) → isolator (NetworkPolicy, Squid egress proxy, optional gVisor) → `scheduling-decisions.jsonl` (intent/outcome records = AI training data).
 
-**Current state of the scaffolding:** the files `scheduler/webhook/app.py`, `scheduler/argo/workflows.yaml`, `scheduler/policies/priorityclass.yaml`, `security/kyverno/policies.yaml`, `security/rbac/roles.yaml`, `isolator/**/*.yaml` and `monitoring/prometheus/servicemonitor.yaml` are **empty placeholders**. The running system today is JupyterHub + simple spawner + Docker/Swarm admin UI; the Kubernetes scheduler design is not wired in. Draft cluster bootstrap commands (kubeadm/containerd, ArgoCD workflow, `deploy.sh`) are in `../ESTIN SAIEP files/Scheduler/inial manifests/`.
+Invariants to preserve:
+- Every job is an Argo Workflow; the hub never creates bare pods. Notebook servers stay on the simple spawner.
+- Policy values live in YAML (`scheduler/policies/*.yaml`, `scheduler/tenants/tenant-template.yaml`, `isolator/network/networkpolicy.yaml`); Python only renders/applies them. Templates use `string.Template`, so a literal `${` in those YAML files breaks rendering.
+- Tenant namespaces get `saiep.estin.dz/provisioned=true` only after every object applied; failed first provisioning deletes the namespace.
+- The webhook (`scheduler/webhook/app.py`, stdlib only) only intercepts namespaces labelled `saiep.estin.dz/tenant=true`, fails closed, checks violations on the object *as submitted* (never launder e.g. `privileged`), and must stay idempotent (`/validate` compares against `mutate(pod)`). `UID_BASE/UID_SPAN` are duplicated in `saiep_scheduler/tenants.py` — keep in sync.
+- `sandboxed` isolation is denied unless `SAIEP_SANDBOX_RUNTIME` is set — never downgraded.
+- AI advisor (`saiep_scheduler/advisor.py`) is advisory only, 2 s timeout, no-op without `SAIEP_AI_URL`.
+- Argo v4 CRDs reject templated values inside `container.resources`: sizing goes through `podSpecPatch`.
+
+Not implemented: Security layer (Kyverno, org RBAC under `security/`), ArgoCD GitOps, HPA/VPA, MinIO archiving of logs/records, Falco install verification, kubeadm path end-to-end (only kind was tested).
 
 ## Conventions and gotchas
 
-- `secrets.env`, `researcher-profiles.jsonl`, `spawn-requests.jsonl` and `venv/` are gitignored; never commit them.
+- `secrets.env`, `researcher-profiles.jsonl`, `spawn-requests.jsonl`, `scheduling-decisions.jsonl` and `venv/` are gitignored; never commit them.
 - `setup_ui.sh` patches files inside `venv/` and `share/` with `sed` (creates `index.html.bak`); it assumes `venv/lib/python3.12`.
 - Recent history is PR-merge style (`reconcile: native SAIEP interfaces…`, `Merge PR #2: SAIEP production deploy`); upstream JupyterHub files should stay close to upstream to ease merges.
