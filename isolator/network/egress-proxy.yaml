@@ -39,6 +39,9 @@ data:
     cache_log stdio:/dev/stderr
     pid_filename none
     coredump_dir /tmp
+    # Bounded fd table keeps memory small (default sizing OOMs at 256Mi).
+    max_filedescriptors 4096
+    pinger_enable off
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -55,6 +58,13 @@ spec:
       labels: {app: saiep-egress-proxy}
     spec:
       automountServiceAccountToken: false
+      # Start as the image's proxy user: no root, and no privilege drop that
+      # would lose access to the stdout/stderr pipes used for logs.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 13
+        runAsGroup: 13
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: squid
           image: ubuntu/squid:latest
@@ -64,7 +74,10 @@ spec:
             tcpSocket: {port: 3128}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: config, mountPath: /etc/squid/allow, readOnly: true}
       volumes:
