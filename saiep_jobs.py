@@ -19,7 +19,7 @@ import re
 from tornado import web
 
 from jupyterhub.handlers import BaseHandler
-from saiep_scheduler import advisor, k8s, records, tenants, workflows
+from saiep_scheduler import advisor, k8s, objectstore, records, tenants, workflows
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DECISIONS_LOG = os.path.join(BASE_DIR, 'scheduling-decisions.jsonl')
@@ -54,7 +54,9 @@ def _get_cluster():
 def _get_decisions():
     global _decisions
     if _decisions is None:
-        _decisions = records.DecisionLog(DECISIONS_LOG)
+        # Local JSONL stays the primary copy; MinIO gets one object per record.
+        shipper = records.RecordShipper(objectstore.ObjectStore()) if objectstore.enabled() else None
+        _decisions = records.DecisionLog(DECISIONS_LOG, shipper=shipper)
     return _decisions
 
 

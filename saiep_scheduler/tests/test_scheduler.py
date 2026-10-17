@@ -191,3 +191,38 @@ def test_outcome_recorded_once_and_survives_restart(tmp_path):
     assert records.DecisionLog(str(path)).outcome(_wf('Succeeded')) is None
     stages = [json.loads(line)['stage'] for line in path.read_text().splitlines()]
     assert stages == ['intent', 'outcome']
+
+
+class _Store:
+    def __init__(self, fail=0):
+        self.fail, self.puts = fail, []
+
+    def put(self, bucket, key, data, content_type):
+        if self.fail:
+            self.fail -= 1
+            raise records.objectstore.ObjectStoreError('down')
+        self.puts.append((bucket, key, json.loads(data), content_type))
+
+
+def test_records_ship_to_minio_one_object_each_and_stay_local(tmp_path):
+    store = _Store(fail=1)  # first upload attempt fails, retry succeeds
+    shipper = records.RecordShipper(store, backoff=0)
+    log = records.DecisionLog(str(tmp_path / 'd.jsonl'), shipper=shipper)
+    a = log.intent(user='alice', namespace='saiep-u-alice', workflow='w1', request={},
+                   decision='accepted')
+    b = log.outcome(_wf('Succeeded'))
+    shipper.flush()
+    assert [p[2] for p in store.puts] == [a, b]
+    assert {p[0] for p in store.puts} == {'saiep-records'}
+    keys = [p[1] for p in store.puts]
+    assert len(set(keys)) == 2 and all(k.startswith('decisions/') and k.endswith('.json') for k in keys)
+    assert '-intent-' in keys[0] and '-outcome-' in keys[1]
+    assert len((tmp_path / 'd.jsonl').read_text().splitlines()) == 2
+
+
+def test_shipping_failure_keeps_local_record(tmp_path):
+    shipper = records.RecordShipper(_Store(fail=99), attempts=2, backoff=0)
+    log = records.DecisionLog(str(tmp_path / 'd.jsonl'), shipper=shipper)
+    log.intent(user='a', namespace='n', workflow=None, request=None, decision='rejected')
+    shipper.flush()
+    assert len((tmp_path / 'd.jsonl').read_text().splitlines()) == 1
