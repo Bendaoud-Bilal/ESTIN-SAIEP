@@ -30,7 +30,7 @@ EXECUTOR = {'executor_access_key': 'argo-executor', 'executor_secret_key': 's3cr
 
 
 def test_bundle_contains_full_policy_set():
-    bundle = tenants.build_tenant_bundle('alice', tier='phd', api_server_cidr='172.18.0.2/32',
+    bundle = tenants.build_tenant_bundle('alice', tier='phd', api_server_cidrs=['172.18.0.2/32'],
                                          api_server_port=6443, **EXECUTOR)
     kinds = [o['kind'] for o in bundle]
     for kind in ('Namespace', 'ResourceQuota', 'LimitRange', 'ServiceAccount',

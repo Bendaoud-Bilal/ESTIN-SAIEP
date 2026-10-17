@@ -2,18 +2,22 @@
 
 Configured by env:
   SAIEP_KUBECONFIG        kubeconfig for the saiep-hub identity (required to enable jobs)
-  SAIEP_API_SERVER_CIDR   API server endpoint CIDR allowed in tenant egress (e.g. 172.18.0.2/32)
-  SAIEP_API_SERVER_PORT   API server endpoint port (default 6443)
+  SAIEP_API_SERVER_CIDR   fallback API server endpoint(s), comma-separated (e.g. 172.18.0.2/32),
+                          used only if the default/kubernetes EndpointSlice cannot be read
+  SAIEP_API_SERVER_PORT   fallback API server endpoint port (default 6443)
   SAIEP_MINIO_EXECUTOR_ACCESS_KEY / _SECRET_KEY
                           write-only MinIO user copied into each tenant namespace
                           for Argo log archiving
 """
+import logging
 import os
 
 from kubernetes import client, config, dynamic
 from kubernetes.client.rest import ApiException
 
 from . import objectstore, tenants
+
+log = logging.getLogger(__name__)
 
 FIELD_MANAGER = 'saiep-scheduler'
 ARGO_GROUP, ARGO_VERSION, WF_PLURAL = 'argoproj.io', 'v1alpha1', 'workflows'
@@ -28,6 +32,7 @@ class Cluster:
         kubeconfig = kubeconfig or os.environ['SAIEP_KUBECONFIG']
         self.api_client = config.new_client_from_config(config_file=kubeconfig)
         self.core = client.CoreV1Api(self.api_client)
+        self.discovery = client.DiscoveryV1Api(self.api_client)
         self.custom = client.CustomObjectsApi(self.api_client)
         self.dynamic = dynamic.DynamicClient(self.api_client)
 
@@ -53,14 +58,35 @@ class Cluster:
         return (labels.get(tenants.PROVISIONED_LABEL) == 'true'
                 and labels.get(tenants.BUNDLE_VERSION_LABEL) == tenants.BUNDLE_VERSION)
 
+    def api_server_endpoints(self):
+        """(cidrs, port) of the API server endpoints, read live from the
+        default/kubernetes EndpointSlice so tenant egress follows a control-plane
+        re-IP or HA change. Falls back to SAIEP_API_SERVER_CIDR/_PORT."""
+        try:
+            es = self.discovery.read_namespaced_endpoint_slice('kubernetes', 'default')
+            addresses = [a for ep in (es.endpoints or []) for a in (ep.addresses or [])]
+            if addresses and es.ports:
+                return tenants.api_server_cidrs(addresses), es.ports[0].port
+            log.warning('default/kubernetes EndpointSlice has no endpoints; using env fallback')
+        except ApiException as e:
+            log.warning('cannot read default/kubernetes EndpointSlice (%s); using env fallback', e.status)
+        cidrs = os.environ.get('SAIEP_API_SERVER_CIDR', '10.96.0.1/32')
+        return ([c.strip() for c in cidrs.split(',') if c.strip()],
+                int(os.environ.get('SAIEP_API_SERVER_PORT', '6443')))
+
     def ensure_tenant(self, username, tier=None):
         """Provision the user's namespace atomically (invariant I-8).
 
         All objects are applied, then the namespace is marked provisioned.
         If anything fails on a namespace we created, it is deleted again.
+        An already-provisioned namespace only gets its NetworkPolicies
+        re-applied with the current API server endpoints (idempotent).
         """
         namespace = tenants.namespace_for(username)
+        cidrs, port = self.api_server_endpoints()
         if self.is_provisioned(namespace):
+            for obj in tenants.build_network_policies(namespace, cidrs, port):
+                self._apply(obj)
             return namespace
         existed = True
         try:
@@ -72,8 +98,8 @@ class Cluster:
         bundle = tenants.build_tenant_bundle(
             username,
             tier=tier,
-            api_server_cidr=os.environ.get('SAIEP_API_SERVER_CIDR', '10.96.0.1/32'),
-            api_server_port=int(os.environ.get('SAIEP_API_SERVER_PORT', '6443')),
+            api_server_cidrs=cidrs,
+            api_server_port=port,
             executor_access_key=os.environ.get('SAIEP_MINIO_EXECUTOR_ACCESS_KEY', ''),
             executor_secret_key=os.environ.get('SAIEP_MINIO_EXECUTOR_SECRET_KEY', ''),
         )
