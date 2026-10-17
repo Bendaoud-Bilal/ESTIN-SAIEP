@@ -18,4 +18,5 @@ monitoring/grafana/grafana.env
 monitoring/prometheus/prometheus.yml
 researcher-profiles.jsonl
 spawn-requests.jsonl
+scheduling-decisions.jsonl
 jupyterhub.log
