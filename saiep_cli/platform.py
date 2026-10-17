@@ -1,12 +1,13 @@
 """Deploy the SAIEP Scheduling + Isolator stack onto the current kube context.
 
-Order matters: PriorityClasses/RBAC -> Argo (+fair-share config) -> job
-templates -> isolator (egress proxy, RuntimeClass) -> admission webhook
-(last, so platform pods are never blocked by it).
+Order matters: PriorityClasses/RBAC -> Argo (+fair-share config, artifact
+repository) -> job templates -> MinIO store -> isolator (egress proxy,
+RuntimeClass) -> admission webhook (last, so platform pods are never blocked by it).
 """
 import base64
 import json
 import os
+import secrets
 from string import Template
 
 from . import ARGO_VERSION, REPO_DIR, STATE_DIR
@@ -15,6 +16,7 @@ ARGO_INSTALL = f'https://github.com/argoproj/argo-workflows/releases/download/{A
 WEBHOOK_IMAGE = os.environ.get('SAIEP_WEBHOOK_IMAGE', 'saiep/admission-webhook:dev')
 WEBHOOK_SVC = 'saiep-admission.saiep-system.svc'
 EGRESS_PROXY_URL = 'http://saiep-egress-proxy.saiep-egress.svc.cluster.local:3128'
+MINIO_NS, MINIO_SVC = 'saiep-storage', 'saiep-minio'
 
 
 def _p(*parts):
@@ -57,26 +59,71 @@ def render_webhook(ca_pem, image=WEBHOOK_IMAGE, sandbox_runtime='', egress_proxy
         )
 
 
+def minio_credentials(state_dir=None):
+    """Generated once into STATE_DIR/minio.json (0600) and reused afterwards."""
+    path = os.path.join(state_dir or STATE_DIR, 'minio.json')
+    if os.path.exists(path):
+        with open(path) as fh:
+            return json.load(fh)
+    creds = {
+        'rootUser': 'saiep-root',
+        'rootPassword': secrets.token_urlsafe(32),
+        'executorAccessKey': 'argo-executor',
+        'executorSecretKey': secrets.token_urlsafe(32),
+        'hubAccessKey': 'saiep-hub',
+        'hubSecretKey': secrets.token_urlsafe(32),
+    }
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as fh:
+        json.dump(creds, fh, indent=2)
+    return creds
+
+
+def _secret(name, namespace, data):
+    # Applied through stdin so secret values never appear in a process argv.
+    return json.dumps({'apiVersion': 'v1', 'kind': 'Secret', 'type': 'Opaque',
+                       'metadata': {'name': name, 'namespace': namespace}, 'stringData': data})
+
+
+def deploy_minio(runner):
+    creds = minio_credentials()
+    runner.run(['kubectl', 'create', 'namespace', MINIO_NS], check=False)
+    apply_text(runner, _secret('saiep-minio-root', MINIO_NS,
+                               {k: creds[k] for k in ('rootUser', 'rootPassword')}))
+    apply_text(runner, _secret('saiep-minio-users', MINIO_NS,
+                               {k: v for k, v in creds.items() if not k.startswith('root')}))
+    # Jobs are immutable: re-create the (idempotent) bootstrap job each deploy.
+    runner.run(['kubectl', '-n', MINIO_NS, 'delete', 'job', 'saiep-minio-setup', '--ignore-not-found'])
+    apply_file(runner, _p('scheduler', 'storage', 'minio.yaml'))
+    runner.run(['kubectl', '-n', MINIO_NS, 'rollout', 'status', f'deploy/{MINIO_SVC}', '--timeout=300s'])
+    runner.run(['kubectl', '-n', MINIO_NS, 'wait', '--for=condition=complete', 'job/saiep-minio-setup',
+                '--timeout=300s'])
+
+
 def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=False):
-    log('1/6 Priorités et rôles…')
+    log('1/7 Priorités et rôles…')
     apply_file(runner, _p('scheduler', 'policies', 'priorityclass.yaml'))
     apply_file(runner, _p('scheduler', 'rbac.yaml'))
 
-    log(f'2/6 Argo Workflows {ARGO_VERSION}…')
+    log(f'2/7 Argo Workflows {ARGO_VERSION}…')
     runner.run(['kubectl', 'create', 'namespace', 'argo'], check=False)
     runner.run(['kubectl', 'apply', '-n', 'argo', '--server-side', '--force-conflicts', '-f', ARGO_INSTALL])
     apply_file(runner, _p('scheduler', 'argo', 'controller-config.yaml'))
     runner.run(['kubectl', '-n', 'argo', 'rollout', 'restart', 'deploy/workflow-controller'])
     runner.run(['kubectl', '-n', 'argo', 'rollout', 'status', 'deploy/workflow-controller', '--timeout=300s'])
 
-    log('3/6 Modèles de calcul (ClusterWorkflowTemplates)…')
+    log('3/7 Modèles de calcul (ClusterWorkflowTemplates)…')
     apply_file(runner, _p('scheduler', 'argo', 'workflows.yaml'))
 
-    log('4/6 Isolation : proxy de sortie, RuntimeClass…')
+    log('4/7 Stockage MinIO (journaux archivés, décisions)…')
+    deploy_minio(runner)
+
+    log('5/7 Isolation : proxy de sortie, RuntimeClass…')
     apply_file(runner, _p('isolator', 'network', 'egress-proxy.yaml'))
     apply_file(runner, _p('isolator', 'runtime', 'runtimeclass.yaml'))
 
-    log("5/6 Webhook d'admission…")
+    log("6/7 Webhook d'admission…")
     if WEBHOOK_IMAGE.endswith(':dev'):
         runner.run(['docker', 'build', '-t', WEBHOOK_IMAGE, _p('scheduler', 'webhook')], capture=False)
         provider.load_image(WEBHOOK_IMAGE)
@@ -94,13 +141,13 @@ def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=Fal
     runner.run(['kubectl', '-n', 'saiep-egress', 'rollout', 'status', 'deploy/saiep-egress-proxy', '--timeout=180s'])
 
     if with_falco:
-        log('6/6 Falco (détection à l\'exécution)…')
+        log('7/7 Falco (détection à l\'exécution)…')
         runner.run(['helm', 'repo', 'add', 'falcosecurity', 'https://falcosecurity.github.io/charts'], check=False)
         runner.run(['helm', 'repo', 'update'])
         runner.run(['helm', 'upgrade', '--install', 'falco', 'falcosecurity/falco', '-n', 'falco',
                     '--create-namespace', '-f', _p('isolator', 'security', 'falco.yaml')], capture=False)
     else:
-        log('6/6 Falco ignoré (optionnel).')
+        log('7/7 Falco ignoré (optionnel).')
 
 
 def api_server_endpoint(runner):
@@ -135,4 +182,20 @@ def write_hub_kubeconfig(runner, path=None):
         f'export SAIEP_KUBECONFIG={path}',
         f'export SAIEP_API_SERVER_CIDR={ip}/32',
         f'export SAIEP_API_SERVER_PORT={port}',
+    ] + minio_env_lines(runner)
+
+
+def minio_env_lines(runner):
+    """Hub-side MinIO settings. The ClusterIP is reachable from a kubeadm node
+    (hub on the control plane); with kind on macOS use a port-forward instead:
+    kubectl -n saiep-storage port-forward svc/saiep-minio 9000:9000"""
+    creds = minio_credentials()
+    cluster_ip = runner.run(['kubectl', '-n', MINIO_NS, 'get', 'svc', MINIO_SVC, '-o',
+                             'jsonpath={.spec.clusterIP}']).strip()
+    return [
+        f'export SAIEP_MINIO_ENDPOINT=http://{cluster_ip or "127.0.0.1"}:9000',
+        f"export SAIEP_MINIO_ACCESS_KEY={creds['hubAccessKey']}",
+        f"export SAIEP_MINIO_SECRET_KEY={creds['hubSecretKey']}",
+        f"export SAIEP_MINIO_EXECUTOR_ACCESS_KEY={creds['executorAccessKey']}",
+        f"export SAIEP_MINIO_EXECUTOR_SECRET_KEY={creds['executorSecretKey']}",
     ]

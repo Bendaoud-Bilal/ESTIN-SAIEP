@@ -130,8 +130,22 @@ def test_deploy_stack_order_webhook_last(tmp_path, monkeypatch):
     flat = [' '.join(c) for c in r.history]
     argo = next(i for i, c in enumerate(flat) if 'argo-workflows/releases' in c)
     templates = next(i for i, c in enumerate(flat) if c.endswith('scheduler/argo/workflows.yaml'))
+    minio = next(i for i, c in enumerate(flat) if c.endswith('scheduler/storage/minio.yaml'))
     webhook = next(i for i, c in enumerate(flat) if 'deploy/saiep-admission' in c)
-    assert argo < templates < webhook
+    assert argo < templates < minio < webhook
+
+
+def test_minio_credentials_generated_once_private_and_kept_off_argv(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(platform, 'STATE_DIR', str(tmp_path))
+    r = Runner(dry_run=True)
+    platform.deploy_minio(r)
+    creds = platform.minio_credentials()
+    assert creds == platform.minio_credentials()  # reused, not regenerated
+    assert os.stat(tmp_path / 'minio.json').st_mode & 0o077 == 0
+    assert len({creds['rootPassword'], creds['executorSecretKey'], creds['hubSecretKey']}) == 3
+    argv = ' '.join(' '.join(c) for c in r.history)
+    assert creds['rootPassword'] not in argv and creds['hubSecretKey'] not in argv
 
 
 def test_state_round_trip(tmp_path):
