@@ -13,7 +13,7 @@ import os
 from kubernetes import client, config, dynamic
 from kubernetes.client.rest import ApiException
 
-from . import tenants
+from . import objectstore, tenants
 
 FIELD_MANAGER = 'saiep-scheduler'
 ARGO_GROUP, ARGO_VERSION, WF_PLURAL = 'argoproj.io', 'v1alpha1', 'workflows'
@@ -118,17 +118,65 @@ class Cluster:
             ARGO_GROUP, ARGO_VERSION, namespace, WF_PLURAL, name, {'spec': {'shutdown': 'Terminate'}}
         )
 
-    def logs(self, namespace, name, tail_lines=500):
+    def get_workflow(self, namespace, name):
+        return self.custom.get_namespaced_custom_object(
+            ARGO_GROUP, ARGO_VERSION, namespace, WF_PLURAL, name
+        )
+
+    def logs(self, namespace, name, tail_lines=500, store=None):
+        """Main-container logs of every pod of the workflow: live pods from
+        the API, garbage-collected ones from the MinIO archive (archiveLogs)."""
         pods = self.core.list_namespaced_pod(
             namespace, label_selector=f'workflows.argoproj.io/workflow={name}'
         ).items
-        chunks = []
-        for pod in sorted(pods, key=lambda p: p.metadata.creation_timestamp):
+        entries = []
+        for pod in pods:
             try:
                 text = self.core.read_namespaced_pod_log(
                     pod.metadata.name, namespace, container='main', tail_lines=tail_lines
                 )
             except ApiException as e:
                 text = f'(journal indisponible: {e.reason})'
-            chunks.append(f'=== {pod.metadata.name} ===\n{text}')
-        return '\n'.join(chunks)
+            entries.append((pod.metadata.creation_timestamp.isoformat(), pod.metadata.name, text))
+        live = {pod_name for _, pod_name, _ in entries}
+        if store is None and objectstore.enabled():
+            store = objectstore.ObjectStore()
+        if store is not None:
+            try:
+                wf = self.get_workflow(namespace, name)
+            except ApiException:
+                wf = {}
+            for started, pod_name, key in archived_logs(wf, namespace, name):
+                if pod_name in live:
+                    continue
+                try:
+                    data = store.get(objectstore.LOGS_BUCKET, key).decode(errors='replace')
+                    text = '\n'.join(data.splitlines()[-tail_lines:])
+                except objectstore.ObjectStoreError as e:
+                    text = f'(journal archivé indisponible: {e})'
+                entries.append((started, f'{pod_name} (archivé)', text))
+        return '\n'.join(f'=== {pod_name} ===\n{text}' for _, pod_name, text in sorted(entries))
+
+
+def archived_logs(workflow, namespace, name):
+    """(startedAt, pod name, key) of each archived main log of a workflow.
+
+    Artifact locations come from WorkflowTaskResults, which the tenant pod's
+    own identity can write: only keys under this workflow's prefix in the
+    logs bucket are trusted, so a forged location cannot reach another
+    tenant's logs through the hub's read credential.
+    """
+    prefix = f'{namespace}/{name}/'
+    out = []
+    for node in (workflow.get('status', {}).get('nodes') or {}).values():
+        if node.get('type') != 'Pod':
+            continue
+        for art in (node.get('outputs') or {}).get('artifacts') or []:
+            s3 = art.get('s3') or {}
+            key = s3.get('key', '')
+            if (art.get('name') != 'main-logs' or s3.get('bucket', objectstore.LOGS_BUCKET)
+                    != objectstore.LOGS_BUCKET or not key.startswith(prefix) or '..' in key):
+                continue
+            pod_name = key[len(prefix):].split('/', 1)[0]
+            out.append((node.get('startedAt') or '', pod_name, key))
+    return out
