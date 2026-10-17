@@ -3,6 +3,8 @@
 Dummy auth (any username, password from SAIEP_DEV_PASSWORD), simple spawner,
 localhost only. Usage:
     export SAIEP_KUBECONFIG=~/.saiep/hub-kubeconfig SAIEP_API_SERVER_CIDR=... SAIEP_API_SERVER_PORT=6443
+    export SAIEP_MINIO_...  (lines printed by python -m saiep_cli, option 12)
+    kubectl -n saiep-storage port-forward svc/saiep-minio 9000:9000  # SAIEP_MINIO_ENDPOINT=http://127.0.0.1:9000
     export SAIEP_DEV_PASSWORD=<any>
     ./venv/bin/jupyterhub -f testing/jupyterhub_config_saiep.py
 """

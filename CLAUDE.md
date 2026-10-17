@@ -47,7 +47,7 @@ bash setup_ui.sh                              # SAIEP branding patch (favicons, 
 
 Design sources live outside the repo in `../ESTIN SAIEP files/`. The adjusted, authoritative scheduler design is `Scheduler/apraoch-to-apply-k8s.txt` ("Path 2", batch-only); it wins over `scheduler_architecture_v2.txt` where they conflict. Files with "not to work with" in the name are obsolete. See `scheduler/README.md` and `isolator/README.md`.
 
-Request path: `/hub/jobs` (`saiep_jobs.py`) → `saiep_scheduler` provisions `saiep-u-<user>` (one namespace per user) → creates an Argo `Workflow` referencing ClusterWorkflowTemplate `saiep-cpu-job`/`saiep-gpu-job` → Argo `namespaceParallelism` queues per user → pod admission (LimitRange, `saiep-admission` mutate/validate webhook, ResourceQuota, Pod Security `restricted`) → kube-scheduler (PriorityClass, `gpu=true` nodes) → isolator (NetworkPolicy, Squid egress proxy, optional gVisor) → `scheduling-decisions.jsonl` (intent/outcome records = AI training data).
+Request path: `/hub/jobs` (`saiep_jobs.py`) → `saiep_scheduler` provisions `saiep-u-<user>` (one namespace per user) → creates an Argo `Workflow` referencing ClusterWorkflowTemplate `saiep-cpu-job`/`saiep-gpu-job` → Argo `namespaceParallelism` queues per user → pod admission (LimitRange, `saiep-admission` mutate/validate webhook, ResourceQuota, Pod Security `restricted`) → kube-scheduler (PriorityClass, `gpu=true` nodes) → isolator (NetworkPolicy, Squid egress proxy, optional gVisor) → `scheduling-decisions.jsonl` (intent/outcome records = AI training data, also shipped one-object-per-record to MinIO `saiep-records`). Argo archives job logs to MinIO `saiep-artifacts` (`scheduler/storage/minio.yaml`); `/hub/jobs` falls back to them after pod GC.
 
 Invariants to preserve:
 - Every job is an Argo Workflow; the hub never creates bare pods. Notebook servers stay on the simple spawner.
@@ -57,10 +57,13 @@ Invariants to preserve:
 - `sandboxed` isolation is denied unless `SAIEP_SANDBOX_RUNTIME` is set — never downgraded.
 - AI advisor (`saiep_scheduler/advisor.py`) is advisory only, 2 s timeout, no-op without `SAIEP_AI_URL`.
 - Argo v4 CRDs reject templated values inside `container.resources`: sizing goes through `podSpecPatch`.
+- Archived-log keys come from WorkflowTaskResults (writable by the tenant pod): the hub only fetches keys under `<namespace>/<workflow>/` in `saiep-artifacts`.
+- Adding objects to the tenant bundle: bump `tenants.BUNDLE_VERSION` so existing namespaces re-apply it.
+- MinIO: upstream images are gone; Chainguard images pinned by digest. Hub env: `SAIEP_MINIO_ENDPOINT`, `SAIEP_MINIO_ACCESS_KEY/SECRET_KEY` (hub user), `SAIEP_MINIO_EXECUTOR_ACCESS_KEY/SECRET_KEY` (required to provision tenants), printed by CLI option 12.
 
 Security Layer (Kyverno, organisation RBAC, Zero Trust) is **disabled for this version** — see `security/README.md`; the scheduler's own guards (admission webhook, tenant RBAC, `saiep-hub-tenant-scope` policy) stay on.
 
-Not implemented: ArgoCD GitOps, HPA/VPA, MinIO archiving of logs/records, Falco install verification, kubeadm path end-to-end (only kind was tested).
+Not implemented: ArgoCD GitOps, HPA/VPA, Falco install verification, kubeadm path end-to-end (only kind was tested).
 
 ## Conventions and gotchas
 

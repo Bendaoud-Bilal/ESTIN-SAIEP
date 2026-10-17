@@ -5,7 +5,7 @@ each pod with `saiep.estin.dz/isolation-tier`; the isolator acts on it.
 
 | Piece | File | Applied by |
 |-------|------|------------|
-| Tenant network boundary (default deny, intra-namespace allow, DNS + egress proxy + API server only) | `network/networkpolicy.yaml` | Scheduler, at namespace provisioning (template, `${NAMESPACE}`) |
+| Tenant network boundary (default deny, intra-namespace allow, DNS + egress proxy + MinIO :9000 + API server only) | `network/networkpolicy.yaml` | Scheduler, at namespace provisioning (template, `${NAMESPACE}`) |
 | Egress proxy (Squid, domain allowlist) | `network/egress-proxy.yaml` | `saiep_cli` platform deploy |
 | Sandboxed runtime (gVisor) | `runtime/runtimeclass.yaml` | `saiep_cli` platform deploy |
 | Runtime detection rules (Falco) | `security/falco.yaml` (Helm values) | `saiep_cli` (optional) |
