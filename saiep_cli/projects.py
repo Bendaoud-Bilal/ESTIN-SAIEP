@@ -28,6 +28,7 @@ POD_TEMPLATE_PATHS = {
     'Pod': ('spec',),
 }
 SCALABLE = ('Deployment', 'StatefulSet')
+PIN_TOLERATION = {'operator': 'Exists', 'effect': 'NoSchedule'}
 _NAME = re.compile(r'^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$')
 
 
@@ -87,6 +88,12 @@ def render(project, docs, node):
             for key in POD_TEMPLATE_PATHS[kind]:
                 spec = spec.setdefault(key, {})
             spec.setdefault('nodeSelector', {})['kubernetes.io/hostname'] = node
+            # The admin chose this node explicitly: tolerate its NoSchedule
+            # taints (e.g. gpu=true). The hostname selector still confines
+            # the pods to that single node.
+            tolerations = spec.setdefault('tolerations', [])
+            if PIN_TOLERATION not in tolerations:
+                tolerations.append(PIN_TOLERATION)
         kept.append(doc)
     return kept, skipped
 

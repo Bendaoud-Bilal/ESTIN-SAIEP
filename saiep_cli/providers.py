@@ -58,7 +58,7 @@ class KindProvider:
         out = self.r.run(['kind', 'get', 'nodes', '--name', self.cluster], check=False)
         names = [n for n in out.split() if n.startswith(self.cluster)]
         # control plane first so the API is up before kubelets reconnect
-        return sorted(names, key=lambda n: 'control-plane' not in n)
+        return sorted(names, key=lambda n: ('control-plane' not in n, n))
 
     def start_all(self):
         nodes = self.nodes()

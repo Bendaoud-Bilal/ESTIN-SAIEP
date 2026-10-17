@@ -75,6 +75,7 @@ def test_render_pins_node_forces_namespace_and_drops_cluster_objects():
     dep = kept[1]
     assert dep['metadata']['namespace'] == 'saiep-p-demo'
     assert dep['spec']['template']['spec']['nodeSelector'] == {'kubernetes.io/hostname': 'saiep-worker'}
+    assert projects.PIN_TOLERATION in dep['spec']['template']['spec']['tolerations']
     cron = kept[2]['spec']['jobTemplate']['spec']['template']['spec']
     assert cron['nodeSelector']['kubernetes.io/hostname'] == 'saiep-worker'
     assert skipped == ['ClusterRoleBinding/pwn']
