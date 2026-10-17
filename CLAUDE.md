@@ -58,6 +58,7 @@ Invariants to preserve:
 - AI advisor (`saiep_scheduler/advisor.py`) is advisory only, 2 s timeout, no-op without `SAIEP_AI_URL`.
 - Argo v4 CRDs reject templated values inside `container.resources`: sizing goes through `podSpecPatch`.
 - Archived-log keys come from WorkflowTaskResults (writable by the tenant pod): the hub only fetches keys under `<namespace>/<workflow>/` in `saiep-artifacts`.
+- Tenant NetworkPolicies come only from `isolator/network/networkpolicy.yaml` (via `tenants.build_network_policies`, I-7). The API server egress rule uses the live `default/kubernetes` EndpointSlice and is re-applied on every `ensure_tenant()` and by CLI "Redéployer la pile SAIEP" — never pin it to a fixed IP.
 - Adding objects to the tenant bundle: bump `tenants.BUNDLE_VERSION` so existing namespaces re-apply it.
 - MinIO: upstream images are gone; Chainguard images pinned by digest. Hub env: `SAIEP_MINIO_ENDPOINT`, `SAIEP_MINIO_ACCESS_KEY/SECRET_KEY` (hub user), `SAIEP_MINIO_EXECUTOR_ACCESS_KEY/SECRET_KEY` (required to provision tenants), printed by CLI option 12.
 
