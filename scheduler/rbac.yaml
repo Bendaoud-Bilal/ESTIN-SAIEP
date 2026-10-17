@@ -90,3 +90,36 @@ subjects:
   - kind: ServiceAccount
     name: saiep-hub
     namespace: saiep-system
+---
+# RBAC cannot scope namespace create/delete by name, so a native admission
+# policy confines the hub identity to tenant namespaces (saiep-u-*): a
+# compromised hub cannot touch kube-system, argo, saiep-system, ...
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: saiep-hub-tenant-scope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["", rbac.authorization.k8s.io, networking.k8s.io, argoproj.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, workflows]
+  matchConditions:
+    - name: is-saiep-hub
+      expression: request.userInfo.username == 'system:serviceaccount:saiep-system:saiep-hub'
+  validations:
+    - expression: >-
+        request.resource.resource == 'namespaces'
+        ? request.name.startsWith('saiep-u-')
+        : request.namespace.startsWith('saiep-u-')
+      message: saiep-hub may only manage saiep-u-* tenant namespaces
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: saiep-hub-tenant-scope
+spec:
+  policyName: saiep-hub-tenant-scope
+  validationActions: [Deny]
