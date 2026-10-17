@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-ESTIN-SAIEP is a **fork of JupyterHub** (upstream `jupyterhub/` package, `jsx/` admin UI, `share/`, `docs/`, `ci/` are mostly unmodified upstream) with a SAIEP layer on top: a secure, scheduled AI/compute platform for ESTIN researchers and students. Most SAIEP-specific work lives in the repo root and in `scheduler/`, `isolator/`, `security/`, `monitoring/`, `static/`, `templates/` — not in the `jupyterhub/` package. Avoid editing `jupyterhub/` unless the change truly belongs in the core.
+ESTIN-SAIEP is a **fork of JupyterHub** (upstream `jupyterhub/` package, `jsx/` admin UI, `share/`, `docs/`, `ci/` are mostly unmodified upstream) with a SAIEP layer on top: a secure, scheduled AI/compute platform for ESTIN researchers and students. Most SAIEP-specific work lives in the repo root and in `scheduler/`, `isolator/`, `monitoring/`, `static/`, `templates/` — not in the `jupyterhub/` package. Avoid editing `jupyterhub/` unless the change truly belongs in the core.
 
 ## Commands
 
@@ -58,7 +58,9 @@ Invariants to preserve:
 - AI advisor (`saiep_scheduler/advisor.py`) is advisory only, 2 s timeout, no-op without `SAIEP_AI_URL`.
 - Argo v4 CRDs reject templated values inside `container.resources`: sizing goes through `podSpecPatch`.
 
-Not implemented: Security layer (Kyverno, org RBAC under `security/`), ArgoCD GitOps, HPA/VPA, MinIO archiving of logs/records, Falco install verification, kubeadm path end-to-end (only kind was tested).
+Security Layer (Kyverno, organisation RBAC, Zero Trust) is **disabled for this version** — see `security/README.md`; the scheduler's own guards (admission webhook, tenant RBAC, `saiep-hub-tenant-scope` policy) stay on.
+
+Not implemented: ArgoCD GitOps, HPA/VPA, MinIO archiving of logs/records, Falco install verification, kubeadm path end-to-end (only kind was tested).
 
 ## Conventions and gotchas
 
