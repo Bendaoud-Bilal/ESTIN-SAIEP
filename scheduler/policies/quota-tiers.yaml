@@ -1,0 +1,18 @@
+# Quota templates selected at namespace provisioning from the user's role
+# (architecture v2 §2.7.4). Values feed ResourceQuota + LimitRange in
+# scheduler/tenants/tenant-template.yaml. Change policy here, not in code.
+default_tier: researcher
+
+tiers:
+  phd:
+    quota: {cpu: "4", memory: 8Gi, gpu: "1", pods: "10"}
+    container_default: {cpu: 500m, memory: 512Mi}
+    container_max: {cpu: "2", memory: 4Gi}
+  researcher:
+    quota: {cpu: "8", memory: 16Gi, gpu: "2", pods: "20"}
+    container_default: {cpu: 500m, memory: 512Mi}
+    container_max: {cpu: "4", memory: 8Gi}
+  external:
+    quota: {cpu: "2", memory: 4Gi, gpu: "0", pods: "5"}
+    container_default: {cpu: 250m, memory: 256Mi}
+    container_max: {cpu: "1", memory: 2Gi}

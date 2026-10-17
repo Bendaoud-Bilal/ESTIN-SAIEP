@@ -1,0 +1,85 @@
+# Job blueprints (Path 2: every request is an Argo Workflow built from one of
+# these). Cluster-scoped so every tenant namespace can reference them.
+# Priority class, deadline, service account and pod labels are set per
+# Workflow by the hub (saiep_scheduler.workflows.build_workflow).
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: saiep-cpu-job
+  labels:
+    app.kubernetes.io/part-of: saiep
+spec:
+  entrypoint: main
+  serviceAccountName: saiep-runner
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 604800
+  arguments:
+    parameters:
+      - name: image
+      - name: command
+      - {name: cpu, value: "1"}
+      - {name: memory, value: 1Gi}
+      - {name: retries, value: "1"}
+  templates:
+    - name: main
+      retryStrategy:
+        limit: "{{workflow.parameters.retries}}"
+        retryPolicy: OnError
+      container:
+        image: "{{workflow.parameters.image}}"
+        command: [sh, -c]
+        args: ["{{workflow.parameters.command}}"]
+        resources:
+          requests:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+          limits:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: saiep-gpu-job
+  labels:
+    app.kubernetes.io/part-of: saiep
+spec:
+  entrypoint: main
+  serviceAccountName: saiep-runner
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 604800
+  arguments:
+    parameters:
+      - name: image
+      - name: command
+      - {name: cpu, value: "2"}
+      - {name: memory, value: 4Gi}
+      - {name: gpu, value: "1"}
+      - {name: retries, value: "1"}
+  templates:
+    - name: main
+      retryStrategy:
+        limit: "{{workflow.parameters.retries}}"
+        retryPolicy: OnError
+      # GPU nodes are labelled gpu=true and tainted gpu=true:NoSchedule at
+      # join time; the webhook also enforces this placement.
+      nodeSelector: {gpu: "true"}
+      tolerations:
+        - {key: gpu, operator: Equal, value: "true", effect: NoSchedule}
+      container:
+        image: "{{workflow.parameters.image}}"
+        command: [sh, -c]
+        args: ["{{workflow.parameters.command}}"]
+        resources:
+          requests:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+            nvidia.com/gpu: "{{workflow.parameters.gpu}}"
+          limits:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+            nvidia.com/gpu: "{{workflow.parameters.gpu}}"

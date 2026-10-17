@@ -1,0 +1,99 @@
+# Admission webhook deployment. ${IMAGE}, ${CA_BUNDLE}, ${SANDBOX_RUNTIME},
+# ${EGRESS_PROXY} are substituted by the installer (saiep_cli). The TLS secret
+# saiep-admission-tls is created by the installer before this is applied.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: saiep-system
+  labels:
+    app.kubernetes.io/part-of: saiep
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saiep-admission
+  namespace: saiep-system
+  labels: {app: saiep-admission}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: saiep-admission}
+  template:
+    metadata:
+      labels: {app: saiep-admission}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webhook
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8443, name: https}]
+          env:
+            - {name: SAIEP_SANDBOX_RUNTIME, value: "${SANDBOX_RUNTIME}"}
+            - {name: SAIEP_EGRESS_PROXY, value: "${EGRESS_PROXY}"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8443, scheme: HTTPS}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8443, scheme: HTTPS}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+        - name: tls
+          secret: {secretName: saiep-admission-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saiep-admission
+  namespace: saiep-system
+spec:
+  selector: {app: saiep-admission}
+  ports: [{port: 443, targetPort: 8443}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: saiep-admission
+webhooks:
+  - name: mutate.pods.saiep.estin.dz
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 5
+    reinvocationPolicy: IfNeeded
+    namespaceSelector:
+      matchLabels: {saiep.estin.dz/tenant: "true"}
+    rules:
+      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods], scope: Namespaced}
+    clientConfig:
+      service: {name: saiep-admission, namespace: saiep-system, path: /mutate}
+      caBundle: ${CA_BUNDLE}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: saiep-admission
+webhooks:
+  - name: validate.pods.saiep.estin.dz
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 5
+    namespaceSelector:
+      matchLabels: {saiep.estin.dz/tenant: "true"}
+    rules:
+      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods], scope: Namespaced}
+    clientConfig:
+      service: {name: saiep-admission, namespace: saiep-system, path: /validate}
+      caBundle: ${CA_BUNDLE}

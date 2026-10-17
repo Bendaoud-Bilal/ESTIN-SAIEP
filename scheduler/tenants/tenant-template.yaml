@@ -1,0 +1,81 @@
+# Per-user tenant bundle, rendered by saiep_scheduler.tenants.build_tenant_bundle().
+# Dollar-brace placeholders are substituted with string.Template. The NetworkPolicy
+# objects come from isolator/network/networkpolicy.yaml (isolator owns content,
+# scheduler applies it at provisioning time — invariant I-7).
+# The namespace label saiep.estin.dz/provisioned=true is added LAST, only after
+# every object applied, so a partial bundle is never treated as valid (I-8).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: saiep
+    saiep.estin.dz/tenant: "true"
+    saiep.estin.dz/tier: ${TIER}
+    pod-security.kubernetes.io/enforce: restricted
+  annotations:
+    saiep.estin.dz/user: "${USERNAME}"
+    saiep.estin.dz/uid: "${UID}"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: saiep-quota
+  namespace: ${NAMESPACE}
+spec:
+  hard:
+    requests.cpu: "${QUOTA_CPU}"
+    limits.cpu: "${QUOTA_CPU}"
+    requests.memory: ${QUOTA_MEMORY}
+    limits.memory: ${QUOTA_MEMORY}
+    requests.nvidia.com/gpu: "${QUOTA_GPU}"
+    pods: "${QUOTA_PODS}"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: saiep-limits
+  namespace: ${NAMESPACE}
+spec:
+  limits:
+    - type: Container
+      default: {cpu: "${DEFAULT_CPU}", memory: ${DEFAULT_MEMORY}}
+      defaultRequest: {cpu: "${DEFAULT_CPU}", memory: ${DEFAULT_MEMORY}}
+      max: {cpu: "${MAX_CPU}", memory: ${MAX_MEMORY}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: saiep-runner
+  namespace: ${NAMESPACE}
+automountServiceAccountToken: true
+---
+# Argo executor needs to write task results with the workload identity.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: saiep-runner-executor
+  namespace: ${NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: saiep-runner-executor
+subjects:
+  - kind: ServiceAccount
+    name: saiep-runner
+    namespace: ${NAMESPACE}
+---
+# Grants the platform user (identity saiep:<username>) read access to their namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: saiep-tenant
+  namespace: ${NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: saiep-tenant
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: "saiep:${USERNAME}"
