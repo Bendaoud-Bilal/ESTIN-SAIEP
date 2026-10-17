@@ -149,6 +149,31 @@ def test_validate_accepts_normalised_and_rejects_raw(policy):
     assert not app.review(admission(pod()), policy, 'validate')['response']['allowed']
 
 
+@pytest.mark.parametrize('path,expected', [
+    ('/mutate?timeout=5s', 'mutate'), ('/validate', 'validate'), ('/healthz', 'healthz'),
+])
+def test_route_ignores_query_string(path, expected):
+    assert app.route(path) == expected
+
+
+def test_server_handles_real_api_server_path(policy):
+    import threading
+    import urllib.request
+
+    app.Handler.policy = policy
+    server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{server.server_port}/mutate?timeout=5s',
+            data=json.dumps(admission(pod())).encode(), method='POST')
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read())
+        assert body['response']['allowed'] and body['response']['uid'] == 'u1'
+    finally:
+        server.shutdown()
+
+
 def test_non_create_operations_pass_through(policy):
     resp = app.review(admission(pod(hostNetwork=True), op='UPDATE'), policy, 'mutate')['response']
     assert resp['allowed'] and 'patch' not in resp

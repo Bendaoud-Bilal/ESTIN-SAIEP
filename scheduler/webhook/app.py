@@ -21,6 +21,7 @@ import sys
 import zlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 LABEL = 'saiep.estin.dz'
 ISOLATION_LABEL = f'{LABEL}/isolation-tier'
@@ -228,6 +229,11 @@ def audit(mode, namespace, pod, response, errs):
     }), flush=True)
 
 
+def route(path):
+    """'/mutate?timeout=5s' -> 'mutate' (the API server appends a timeout query)."""
+    return urlsplit(path).path.strip('/')
+
+
 class Handler(BaseHTTPRequestHandler):
     policy = None
 
@@ -240,13 +246,13 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path == '/healthz':
+        if route(self.path) == 'healthz':
             self._send(200, {'ok': True})
         else:
             self._send(404, {'error': 'not found'})
 
     def do_POST(self):
-        mode = self.path.strip('/')
+        mode = route(self.path)
         if mode not in ('mutate', 'validate'):
             self._send(404, {'error': 'not found'})
             return
