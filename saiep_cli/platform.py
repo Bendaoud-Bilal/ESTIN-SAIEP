@@ -10,6 +10,10 @@ import os
 import secrets
 from string import Template
 
+import yaml
+
+from saiep_scheduler import tenants
+
 from . import ARGO_VERSION, REPO_DIR, STATE_DIR
 
 ARGO_INSTALL = f'https://github.com/argoproj/argo-workflows/releases/download/{ARGO_VERSION}/install.yaml'
@@ -119,9 +123,10 @@ def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=Fal
     log('4/7 Stockage MinIO (journaux archivés, décisions)…')
     deploy_minio(runner)
 
-    log('5/7 Isolation : proxy de sortie, RuntimeClass…')
+    log('5/7 Isolation : proxy de sortie, RuntimeClass, politiques réseau des espaces existants…')
     apply_file(runner, _p('isolator', 'network', 'egress-proxy.yaml'))
     apply_file(runner, _p('isolator', 'runtime', 'runtimeclass.yaml'))
+    refresh_tenant_network(runner, log)
 
     log("6/7 Webhook d'admission…")
     if WEBHOOK_IMAGE.endswith(':dev'):
@@ -151,11 +156,31 @@ def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=Fal
 
 
 def api_server_endpoint(runner):
-    out = runner.run(['kubectl', 'get', 'endpointslice', '-n', 'default',
-                      '-l', 'kubernetes.io/service-name=kubernetes', '-o',
-                      'jsonpath={.items[0].endpoints[0].addresses[0]} {.items[0].ports[0].port}'])
-    ip, _, port = out.strip().partition(' ')
-    return ip, port or '6443'
+    """(cidrs, port) of every API server endpoint, from the default/kubernetes EndpointSlice."""
+    out = runner.run(['kubectl', 'get', 'endpointslice', '-n', 'default', 'kubernetes', '-o',
+                      'jsonpath={.endpoints[*].addresses[*]} {.ports[0].port}'])
+    *addresses, port = out.split() or ['']
+    if not addresses:
+        raise RuntimeError("EndpointSlice default/kubernetes sans adresse : API server introuvable")
+    return tenants.api_server_cidrs(addresses), port or '6443'
+
+
+def refresh_tenant_network(runner, log=print):
+    """Re-render the isolator NetworkPolicies in every saiep-u-* namespace with
+    the current API server endpoints (control-plane re-IP, HA change)."""
+    names = runner.run(['kubectl', 'get', 'namespaces', '-l', f'{tenants.TENANT_LABEL}=true',
+                        '-o', 'jsonpath={.items[*].metadata.name}']).split()
+    if not names:
+        return []
+    cidrs, port = api_server_endpoint(runner)
+    for ns in names:
+        policies = tenants.build_network_policies(ns, cidrs, port)
+        # Same field manager as the hub (saiep_scheduler.k8s) so ownership stays single.
+        runner.run(['kubectl', 'apply', '--server-side', '--force-conflicts',
+                    '--field-manager=saiep-scheduler', '-f', '-'],
+                   input=yaml.safe_dump_all(policies, sort_keys=False))
+    log(f'   NetworkPolicies réappliquées ({", ".join(cidrs)}:{port}) : {len(names)} espace(s)')
+    return names
 
 
 def write_hub_kubeconfig(runner, path=None):
@@ -177,10 +202,10 @@ def write_hub_kubeconfig(runner, path=None):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as fh:
         json.dump(config, fh, indent=2)
-    ip, port = api_server_endpoint(runner)
+    cidrs, port = api_server_endpoint(runner)
     return path, [
         f'export SAIEP_KUBECONFIG={path}',
-        f'export SAIEP_API_SERVER_CIDR={ip}/32',
+        f'export SAIEP_API_SERVER_CIDR={",".join(cidrs)}',
         f'export SAIEP_API_SERVER_PORT={port}',
     ] + minio_env_lines(runner)
 

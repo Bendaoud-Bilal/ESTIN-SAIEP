@@ -153,3 +153,38 @@ def test_state_round_trip(tmp_path):
     s['provider'] = 'kubeadm'
     s.save()
     assert State(directory=str(tmp_path))['provider'] == 'kubeadm'
+
+
+def test_refresh_tenant_network_rerenders_every_tenant_with_current_endpoint():
+    applied = []
+
+    class Recording(FakeRunner):
+        def run(self, cmd, **kw):
+            if kw.get('input'):
+                applied.append(kw['input'])
+            return super().run(cmd, **kw)
+
+    r = Recording({
+        ('kubectl', 'get', 'namespaces'): 'saiep-u-alice saiep-u-bob',
+        ('kubectl', 'get', 'endpointslice'): '172.23.0.5 6443',
+    })
+    assert platform.refresh_tenant_network(r, log=lambda *_: None) == ['saiep-u-alice', 'saiep-u-bob']
+    assert len(applied) == 2
+    for ns, text in zip(['saiep-u-alice', 'saiep-u-bob'], applied):
+        docs = list(yaml.safe_load_all(text))
+        assert {d['metadata']['namespace'] for d in docs} == {ns}
+        api = next(d for d in docs if d['metadata']['name'] == 'saiep-allow-dns-and-proxy')
+        assert api['spec']['egress'][-1]['to'] == [{'ipBlock': {'cidr': '172.23.0.5/32'}}]
+    assert ['kubectl', 'apply', '--server-side', '--force-conflicts',
+            '--field-manager=saiep-scheduler', '-f', '-'] in r.history
+
+
+def test_refresh_tenant_network_is_noop_without_tenants():
+    r = FakeRunner()
+    assert platform.refresh_tenant_network(r, log=lambda *_: None) == []
+    assert not any(c[:3] == ['kubectl', 'get', 'endpointslice'] for c in r.history)
+
+
+def test_api_server_endpoint_lists_all_addresses():
+    r = FakeRunner({('kubectl', 'get', 'endpointslice'): '10.0.0.1 10.0.0.2 6443'})
+    assert platform.api_server_endpoint(r) == (['10.0.0.1/32', '10.0.0.2/32'], '6443')
