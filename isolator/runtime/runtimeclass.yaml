@@ -1,0 +1,20 @@
+# Isolation tiers (scheduler passes the label saiep.estin.dz/isolation-tier,
+# the isolator acts on it):
+#   standard  -> default runc runtime + restricted security context
+#   sandboxed -> gVisor user-space kernel (this RuntimeClass)
+#
+# Prerequisite on every node that may run sandboxed pods: install runsc and
+# register it in containerd (see isolator/README.md). Nodes are labelled
+# saiep.estin.dz/gvisor=true once runsc is installed. The admission webhook
+# only maps 'sandboxed' to this class when SAIEP_SANDBOX_RUNTIME=gvisor is
+# set; otherwise sandboxed requests are denied (never silently downgraded).
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+  labels:
+    app.kubernetes.io/part-of: saiep
+handler: runsc
+scheduling:
+  nodeSelector:
+    saiep.estin.dz/gvisor: "true"

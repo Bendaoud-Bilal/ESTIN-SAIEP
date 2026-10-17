@@ -1,0 +1,81 @@
+# Egress proxy: the ONLY path from tenant pods to the internet (tenant
+# NetworkPolicy allows TCP 3128 to these pods and nothing else outside the
+# namespace). Squid denies every destination not in the domain allowlist.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: saiep-egress
+  labels:
+    app.kubernetes.io/part-of: saiep
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saiep-egress-allowlist
+  namespace: saiep-egress
+data:
+  allowlist.txt: |
+    .pypi.org
+    .pythonhosted.org
+    .github.com
+    .githubusercontent.com
+    .huggingface.co
+    .hf.co
+    .conda.io
+    .anaconda.org
+    .kaggle.com
+  squid.conf: |
+    http_port 3128
+    acl allowlist dstdomain "/etc/squid/allow/allowlist.txt"
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    acl CONNECT method CONNECT
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowlist
+    http_access deny all
+    cache deny all
+    access_log stdio:/dev/stdout
+    cache_log stdio:/dev/stderr
+    pid_filename none
+    coredump_dir /tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saiep-egress-proxy
+  namespace: saiep-egress
+  labels: {app: saiep-egress-proxy}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: saiep-egress-proxy}
+  template:
+    metadata:
+      labels: {app: saiep-egress-proxy}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: squid
+          image: ubuntu/squid:latest
+          args: ["-f", "/etc/squid/allow/squid.conf", "-NYC"]
+          ports: [{containerPort: 3128}]
+          readinessProbe:
+            tcpSocket: {port: 3128}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/squid/allow, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: saiep-egress-allowlist}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saiep-egress-proxy
+  namespace: saiep-egress
+spec:
+  selector: {app: saiep-egress-proxy}
+  ports: [{port: 3128, targetPort: 3128}]

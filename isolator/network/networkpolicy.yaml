@@ -1,0 +1,66 @@
+# Per-tenant network boundary (architecture v2 §2.6), rendered for every user
+# namespace at provisioning time by saiep_scheduler.tenants. ${NAMESPACE} is
+# substituted. Isolator owns the content; the scheduler only applies it.
+#
+#   cross-namespace ingress/egress : blocked
+#   outbound internet              : only via the egress proxy (allowlist)
+#   pod-to-pod inside namespace    : permitted
+#   DNS                            : kube-system only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: saiep-default-deny
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: saiep-allow-same-namespace
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: saiep-allow-dns-and-proxy
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saiep-egress
+          podSelector:
+            matchLabels:
+              app: saiep-egress-proxy
+      ports:
+        - {protocol: TCP, port: 3128}
+    # Argo executor (wait/init) must reach the Kubernetes API to report results.
+    - to:
+        - ipBlock:
+            cidr: ${API_SERVER_CIDR}
+      ports:
+        - {protocol: TCP, port: ${API_SERVER_PORT}}
