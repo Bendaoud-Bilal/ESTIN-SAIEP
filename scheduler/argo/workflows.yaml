@@ -13,6 +13,9 @@ spec:
   serviceAccountName: saiep-runner
   podGC:
     strategy: OnWorkflowSuccess
+    # Keep pods (and their logs for /hub/jobs) for a day; completed pods
+    # do not count against the namespace pod quota.
+    deleteDelayDuration: 24h
   ttlStrategy:
     secondsAfterCompletion: 604800
   arguments:
@@ -27,17 +30,18 @@ spec:
       retryStrategy:
         limit: "{{workflow.parameters.retries}}"
         retryPolicy: OnError
+      # Sizing is templated through podSpecPatch: the Argo CRD schema rejects
+      # parameter expressions inside container.resources.
+      podSpecPatch: |
+        containers:
+          - name: main
+            resources:
+              requests: {cpu: "{{workflow.parameters.cpu}}", memory: "{{workflow.parameters.memory}}"}
+              limits: {cpu: "{{workflow.parameters.cpu}}", memory: "{{workflow.parameters.memory}}"}
       container:
         image: "{{workflow.parameters.image}}"
         command: [sh, -c]
         args: ["{{workflow.parameters.command}}"]
-        resources:
-          requests:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
-          limits:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
@@ -50,6 +54,9 @@ spec:
   serviceAccountName: saiep-runner
   podGC:
     strategy: OnWorkflowSuccess
+    # Keep pods (and their logs for /hub/jobs) for a day; completed pods
+    # do not count against the namespace pod quota.
+    deleteDelayDuration: 24h
   ttlStrategy:
     secondsAfterCompletion: 604800
   arguments:
@@ -70,16 +77,19 @@ spec:
       nodeSelector: {gpu: "true"}
       tolerations:
         - {key: gpu, operator: Equal, value: "true", effect: NoSchedule}
+      podSpecPatch: |
+        containers:
+          - name: main
+            resources:
+              requests:
+                cpu: "{{workflow.parameters.cpu}}"
+                memory: "{{workflow.parameters.memory}}"
+                nvidia.com/gpu: "{{workflow.parameters.gpu}}"
+              limits:
+                cpu: "{{workflow.parameters.cpu}}"
+                memory: "{{workflow.parameters.memory}}"
+                nvidia.com/gpu: "{{workflow.parameters.gpu}}"
       container:
         image: "{{workflow.parameters.image}}"
         command: [sh, -c]
         args: ["{{workflow.parameters.command}}"]
-        resources:
-          requests:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
-            nvidia.com/gpu: "{{workflow.parameters.gpu}}"
-          limits:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
-            nvidia.com/gpu: "{{workflow.parameters.gpu}}"

@@ -10,11 +10,6 @@ metadata:
 data:
   namespaceParallelism: "2"
   parallelism: "50"
-  # Defaults merged into every workflow (Argo executor containers included).
-  workflowDefaults: |
-    spec:
-      podGC:
-        strategy: OnWorkflowSuccess
   executor: |
     resources:
       requests: {cpu: 50m, memory: 64Mi}
