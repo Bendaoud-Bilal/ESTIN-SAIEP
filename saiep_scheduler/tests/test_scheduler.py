@@ -44,6 +44,20 @@ def test_bundle_contains_full_policy_set():
     assert api['spec']['egress'][-1]['to'][0]['ipBlock']['cidr'] == '172.18.0.2/32'
 
 
+@pytest.mark.parametrize('q,expected', [('500m', 0.5), ('2', 2), ('0.5', 0.5), ('4Gi', 4 * 2**30),
+                                        ('512Mi', 512 * 2**20)])
+def test_quantity(q, expected):
+    assert tenants.quantity(q) == expected
+
+
+def test_check_fits_against_tier_limits():
+    assert tenants.check_fits('1', '2Gi', 0, tier='external') is None
+    assert 'vCPU' in tenants.check_fits('4', '1Gi', 0, tier='external')
+    assert 'mémoire' in tenants.check_fits('1', '4Gi', 0, tier='external')
+    assert 'GPU' in tenants.check_fits('1', '1Gi', 1, tier='external')
+    assert tenants.check_fits('2', '4Gi', 1, tier='phd') is None
+
+
 def test_unknown_tier_rejected():
     with pytest.raises(ValueError):
         tenants.build_tenant_bundle('alice', tier='vip')

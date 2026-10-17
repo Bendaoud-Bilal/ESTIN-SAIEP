@@ -135,6 +135,9 @@ class JobsSubmitHandler(_JobsBase):
             req = workflows.JobRequest.from_form(body)
             if req.image not in JOB_IMAGES:
                 raise ValueError('image non proposée par la plateforme')
+            too_big = tenants.check_fits(req.cpu, req.memory, req.gpu, USER_TIERS.get(user))
+            if too_big:
+                raise ValueError(too_big)
         except ValueError as e:
             decisions.intent(user=user, namespace=namespace, workflow=None,
                              request=None, decision='rejected', reason=str(e))

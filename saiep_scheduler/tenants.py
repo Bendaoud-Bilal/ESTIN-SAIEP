@@ -51,6 +51,34 @@ def load_tiers(path=QUOTA_TIERS):
         return yaml.safe_load(f)
 
 
+_UNITS = {'m': 1e-3, 'Ki': 2**10, 'Mi': 2**20, 'Gi': 2**30, 'Ti': 2**40, 'k': 1e3, 'M': 1e6, 'G': 1e9}
+
+
+def quantity(value):
+    """Parse a Kubernetes quantity ('500m', '2', '4Gi') to a float."""
+    value = str(value)
+    for suffix in sorted(_UNITS, key=len, reverse=True):
+        if value.endswith(suffix):
+            return float(value[: -len(suffix)]) * _UNITS[suffix]
+    return float(value)
+
+
+def check_fits(cpu, memory, gpu, tier=None, tiers=None):
+    """Reject at intake what admission would reject later (LimitRange max,
+    ResourceQuota ceilings). Returns an error message or None."""
+    tiers = tiers or load_tiers()
+    tier = tier or tiers['default_tier']
+    spec = tiers['tiers'][tier]
+    max_cpu, max_mem = spec['container_max']['cpu'], spec['container_max']['memory']
+    if quantity(cpu) > quantity(max_cpu):
+        return f'palier « {tier} » : {max_cpu} vCPU maximum par calcul'
+    if quantity(memory) > quantity(max_mem):
+        return f'palier « {tier} » : {max_mem} de mémoire maximum par calcul'
+    if int(gpu) > int(spec['quota']['gpu']):
+        return f'palier « {tier} » : {spec["quota"]["gpu"]} GPU autorisé(s)'
+    return None
+
+
 def _render(path, values):
     with open(path) as f:
         text = Template(f.read()).substitute(values)
