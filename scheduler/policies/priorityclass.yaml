@@ -1,0 +1,24 @@
+# SAIEP priority tiers (adjusted Path 2 design: batch-only, no Interactive tier).
+# Higher tiers may preempt lower tiers, never the reverse.
+# Tenant pods may only use these classes — the admission webhook rejects others.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: saiep-batch
+  labels:
+    app.kubernetes.io/part-of: saiep
+value: 500
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "SAIEP Tier 2 — batch training / GPU jobs. Preempts saiep-background."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: saiep-background
+  labels:
+    app.kubernetes.io/part-of: saiep
+value: 100
+globalDefault: false
+preemptionPolicy: Never
+description: "SAIEP Tier 3 — best-effort background jobs. No preemption rights."

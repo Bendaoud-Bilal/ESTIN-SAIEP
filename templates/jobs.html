@@ -1,0 +1,269 @@
+{% extends "page.html" %}
+{% block title %}Calculs — ESTIN SAIEP{% endblock title %}
+{% block main %}
+  <div class="container">
+    <div class="saiep-home-header text-center"
+         style="margin: 30px 0 30px 0;
+                padding: 30px;
+                background: #34495e;
+                border-radius: 10px;
+                border-bottom: 4px solid #e54c3f">
+      <img src="{{ static_url('img/logo-estin.png') }}"
+           alt="ESTIN"
+           style="height: 60px;
+                  margin-bottom: 12px" />
+      <h2 style="color: #fff; margin: 0">Mes calculs</h2>
+      <p style="color: #ccc; margin-top: 8px">
+        Soumettez un travail d'exécution — il est mis en file, admis puis placé par l'ordonnanceur SAIEP.
+      </p>
+    </div>
+    {% if not jobs_enabled %}
+      <div class="alert alert-warning">
+        Le cluster de calcul SAIEP n'est pas encore configuré sur ce serveur. Contactez l'administrateur.
+      </div>
+    {% else %}
+      <div class="row">
+        <div class="col-lg-5">
+          <div class="card mb-4" style="border-top: 3px solid #e54c3f">
+            <div class="card-body">
+              <h4 style="color: #34495e">Nouveau calcul</h4>
+              <form id="job-form" autocomplete="off">
+                <label class="form-label" for="job-name">Nom du calcul</label>
+                <input id="job-name"
+                       name="name"
+                       class="form-control"
+                       required
+                       pattern="[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?"
+                       placeholder="entrainement-cnn" />
+                <label class="form-label mt-2" for="job-image">Environnement (image)</label>
+                <select id="job-image" name="image" class="form-control">
+                  {% for image in images %}<option value="{{ image }}">{{ image }}</option>{% endfor %}
+                </select>
+                <label class="form-label mt-2" for="job-command">Commande</label>
+                <textarea id="job-command"
+                          name="command"
+                          class="form-control"
+                          rows="3"
+                          required
+                          placeholder="python -c &quot;print('bonjour SAIEP')&quot;"></textarea>
+                <div class="row mt-2">
+                  <div class="col">
+                    <label class="form-label" for="job-cpu">vCPU</label>
+                    <select id="job-cpu" name="cpu" class="form-control">
+                      {% for c in cpu_choices %}
+                        <option value="{{ c }}" {% if c == '1' %}selected{% endif %}>{{ c }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="form-label" for="job-memory">Mémoire</label>
+                    <select id="job-memory" name="memory" class="form-control">
+                      {% for m in memory_choices %}
+                        <option value="{{ m }}" {% if m == '1Gi' %}selected{% endif %}>{{ m }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="form-label" for="job-gpu">GPU</label>
+                    <select id="job-gpu" name="gpu" class="form-control">
+                      {% for g in gpu_choices %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+                    </select>
+                  </div>
+                </div>
+                <div class="row mt-2">
+                  <div class="col">
+                    <label class="form-label" for="job-tier">Priorité</label>
+                    <select id="job-tier" name="tier" class="form-control">
+                      <option value="batch" selected>Batch (entraînement)</option>
+                      <option value="background">Arrière-plan (best effort)</option>
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="form-label" for="job-isolation">Isolation</label>
+                    <select id="job-isolation" name="isolation" class="form-control">
+                      <option value="standard" selected>Standard</option>
+                      <option value="sandboxed">Renforcée (gVisor)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="row mt-2">
+                  <div class="col">
+                    <label class="form-label" for="job-timeout">Durée max</label>
+                    <select id="job-timeout" name="timeout_seconds" class="form-control">
+                      <option value="3600" selected>1 heure</option>
+                      <option value="14400">4 heures</option>
+                      <option value="86400">1 journée</option>
+                      <option value="604800">1 semaine</option>
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="form-label" for="job-retries">Tentatives</label>
+                    <select id="job-retries" name="retries" class="form-control">
+                      <option value="0">0</option>
+                      <option value="1" selected>1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="job-error" class="alert alert-danger mt-3 d-none" role="alert"></div>
+                <button type="submit" class="btn btn-jupyter mt-3 w-100">Soumettre</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-7">
+          <div class="d-flex justify-content-between align-items-center">
+            <h4 style="color: #34495e">Historique</h4>
+            <button id="job-refresh" type="button" class="btn btn-sm btn-outline-secondary">Actualiser</button>
+          </div>
+          <table class="table table-striped">
+            <thead style="background: #34495e; color: #fff">
+              <tr>
+                <th>Calcul</th>
+                <th>État</th>
+                <th>Ressources</th>
+                <th>Créé</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="job-rows">
+              <tr>
+                <td colspan="5" class="text-muted">Chargement…</td>
+              </tr>
+            </tbody>
+          </table>
+          <pre id="job-logs"
+               class="d-none"
+               style="background: #1e2b38;
+                      color: #e6e6e6;
+                      padding: 12px;
+                      border-radius: 6px;
+                      border-left: 4px solid #e54c3f;
+                      max-height: 420px;
+                      overflow: auto"></pre>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+{% endblock main %}
+{% block script %}
+  {{ super() }}
+  {% if jobs_enabled %}
+    <script type="text/javascript">
+      (function () {
+        const API = window.jhdata.base_url + "jobs/api";
+        const PHASES = {
+          Pending: ["En attente", "secondary"],
+          Running: ["En cours", "primary"],
+          Succeeded: ["Terminé", "success"],
+          Failed: ["Échec", "danger"],
+          Error: ["Erreur", "danger"],
+        };
+        const rows = document.getElementById("job-rows");
+        const errorBox = document.getElementById("job-error");
+        const logsBox = document.getElementById("job-logs");
+
+        function call(path, opts) {
+          opts = opts || {};
+          opts.headers = Object.assign(
+            { "Content-Type": "application/json", "X-XSRFToken": window.jhdata.xsrf_token },
+            opts.headers || {},
+          );
+          return fetch(API + path, opts).then(function (r) {
+            return r.json().then(function (body) {
+              if (!r.ok) throw new Error(body.error || body.message || r.statusText);
+              return body;
+            });
+          });
+        }
+
+        function cell(tr, text, cls) {
+          const td = document.createElement("td");
+          if (cls) td.className = cls;
+          td.textContent = text;
+          tr.appendChild(td);
+          return td;
+        }
+
+        function button(label, cls, onClick) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-xs btn-sm me-1 " + cls;
+          b.textContent = label;
+          b.addEventListener("click", onClick);
+          return b;
+        }
+
+        function render(jobs) {
+          rows.replaceChildren();
+          if (!jobs.length) {
+            const tr = document.createElement("tr");
+            cell(tr, "Aucun calcul pour le moment.", "text-muted").colSpan = 5;
+            rows.appendChild(tr);
+            return;
+          }
+          jobs.forEach(function (job) {
+            const tr = document.createElement("tr");
+            const name = cell(tr, job.job || job.name);
+            name.title = job.name + " · " + (job.image || "");
+            const phase = PHASES[job.phase] || [job.phase, "secondary"];
+            const status = cell(tr, "");
+            const badge = document.createElement("span");
+            badge.className = "badge bg-" + phase[1];
+            badge.textContent = phase[0];
+            badge.title = job.message || "";
+            status.appendChild(badge);
+            cell(tr, job.cpu + " vCPU · " + job.memory + (job.gpu !== "0" ? " · " + job.gpu + " GPU" : ""));
+            cell(tr, job.created ? new Date(job.created).toLocaleString("fr-FR") : "");
+            const actions = cell(tr, "");
+            actions.appendChild(button("Journal", "btn-outline-secondary", function () { showLogs(job.name); }));
+            if (job.phase === "Pending" || job.phase === "Running") {
+              actions.appendChild(button("Arrêter", "btn-danger", function () { stop(job.name); }));
+            }
+            rows.appendChild(tr);
+          });
+        }
+
+        function refresh() {
+          return call("/list").then(function (b) { render(b.jobs); }).catch(function (e) {
+            rows.replaceChildren();
+            const tr = document.createElement("tr");
+            cell(tr, "Erreur : " + e.message, "text-danger").colSpan = 5;
+            rows.appendChild(tr);
+          });
+        }
+
+        function showLogs(name) {
+          logsBox.classList.remove("d-none");
+          logsBox.textContent = "Chargement du journal…";
+          call("/logs/" + encodeURIComponent(name)).then(function (b) {
+            logsBox.textContent = b.logs || "(journal vide)";
+          }).catch(function (e) { logsBox.textContent = "Erreur : " + e.message; });
+        }
+
+        function stop(name) {
+          if (!confirm("Arrêter le calcul " + name + " ?")) return;
+          call("/stop/" + encodeURIComponent(name), { method: "POST" }).then(refresh)
+            .catch(function (e) { alert(e.message); });
+        }
+
+        document.getElementById("job-form").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          errorBox.classList.add("d-none");
+          const data = Object.fromEntries(new FormData(ev.target).entries());
+          call("/submit", { method: "POST", body: JSON.stringify(data) }).then(function () {
+            ev.target.reset();
+            refresh();
+          }).catch(function (e) {
+            errorBox.textContent = e.message;
+            errorBox.classList.remove("d-none");
+          });
+        });
+        document.getElementById("job-refresh").addEventListener("click", refresh);
+        refresh();
+        setInterval(refresh, 10000);
+      })();
+    </script>
+  {% endif %}
+{% endblock script %}

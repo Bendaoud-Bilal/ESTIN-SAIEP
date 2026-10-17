@@ -12,6 +12,9 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 # Native SAIEP admin interface (resources + monitoring) lives in saiep_admin.py
 sys.path.insert(0, base_dir)
 import saiep_admin
+# Job intake → Argo Workflows (Scheduling Layer, Path 2). Enabled when
+# SAIEP_KUBECONFIG is set (see secrets.env.example).
+import saiep_jobs
 
 PUBLIC_URL = 'https://104.248.22.193.sslip.io'
 INTERNAL_HUB_URL = 'http://172.17.0.1:8000'
@@ -108,7 +111,12 @@ class LandingHandler(BaseHandler):
 # saiep_admin.py. Réservée aux administrateurs.
 c.JupyterHub.extra_handlers = [
     (r'/landing', LandingHandler),
-] + saiep_admin.resource_handlers()
+] + saiep_admin.resource_handlers() + saiep_jobs.job_handlers()
+
+# --- Calculs (Argo) : palier de quota par utilisateur ------------------------
+# phd | researcher | external (scheduler/policies/quota-tiers.yaml). Les
+# utilisateurs absents reçoivent le palier par défaut.
+saiep_jobs.USER_TIERS = {}
 
 # --- Redirection par rôle après connexion ----------------------------------
 # Les visiteurs non connectés voient la page d'accueil ; après connexion,

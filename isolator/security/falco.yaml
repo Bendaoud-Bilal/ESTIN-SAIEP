@@ -1,0 +1,55 @@
+# Helm values for falcosecurity/falco — runtime detection for tenant pods.
+# Install: saiep_cli "Deploy SAIEP stack" (optional step) or
+#   helm upgrade --install falco falcosecurity/falco -n falco --create-namespace \
+#     -f isolator/security/falco.yaml
+driver:
+  kind: modern_ebpf
+tty: true
+falco:
+  json_output: true
+customRules:
+  saiep-rules.yaml: |-
+    - macro: saiep_tenant
+      condition: (k8s.ns.name startswith "saiep-u-")
+
+    - rule: SAIEP interactive shell in tenant job
+      desc: A shell with a terminal was spawned inside a tenant batch job.
+      condition: >
+        spawned_process and container and saiep_tenant
+        and proc.name in (bash, sh, zsh, ash) and proc.tty != 0
+      output: >
+        Interactive shell in SAIEP job (user=%user.name ns=%k8s.ns.name
+        pod=%k8s.pod.name cmd=%proc.cmdline)
+      priority: WARNING
+      tags: [saiep, isolation]
+
+    - rule: SAIEP write below system directories
+      desc: Tenant job tried to write under /etc, /usr, /bin or /lib.
+      condition: >
+        open_write and container and saiep_tenant
+        and (fd.name startswith /etc/ or fd.name startswith /usr/
+             or fd.name startswith /bin/ or fd.name startswith /lib/)
+      output: >
+        System write in SAIEP job (file=%fd.name ns=%k8s.ns.name pod=%k8s.pod.name)
+      priority: ERROR
+      tags: [saiep, isolation]
+
+    - rule: SAIEP outbound connection bypassing proxy
+      desc: Tenant job opened an outbound connection to a non-cluster address.
+      condition: >
+        outbound and container and saiep_tenant
+        and not fd.snet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+      output: >
+        Direct egress from SAIEP job (dest=%fd.name ns=%k8s.ns.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [saiep, isolation, network]
+
+    - rule: SAIEP crypto-miner indicators
+      desc: Known miner binaries or stratum protocol in tenant job.
+      condition: >
+        spawned_process and container and saiep_tenant
+        and (proc.name in (xmrig, minerd, cpuminer) or proc.cmdline contains "stratum+tcp")
+      output: >
+        Miner activity in SAIEP job (cmd=%proc.cmdline ns=%k8s.ns.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [saiep, isolation]

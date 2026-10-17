@@ -1,0 +1,16 @@
+# Argo workflow-controller config: per-user fair share.
+# namespaceParallelism caps concurrently running workflows per tenant
+# namespace (one namespace per user), so no user can monopolise a tier;
+# excess workflows stay Pending in Argo's queue.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-controller-configmap
+  namespace: argo
+data:
+  namespaceParallelism: "2"
+  parallelism: "50"
+  executor: |
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 250m, memory: 256Mi}
