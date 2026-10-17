@@ -1,11 +1,17 @@
 # Per-tenant network boundary (architecture v2 §2.6), rendered for every user
-# namespace at provisioning time by saiep_scheduler.tenants. ${NAMESPACE} is
-# substituted. Isolator owns the content; the scheduler only applies it.
+# namespace by saiep_scheduler.tenants. ${NAMESPACE} and the API server
+# endpoint (API_SERVER_PEERS, API_SERVER_PORT) are substituted. Isolator
+# owns the content; the scheduler only applies it (invariant I-7).
 #
 #   cross-namespace ingress/egress : blocked
 #   outbound internet              : only via the egress proxy (allowlist)
 #   pod-to-pod inside namespace    : permitted
 #   DNS                            : kube-system only
+#   MinIO (saiep-storage) TCP 9000 : Argo executor log archiving. NetworkPolicy
+#                                    is per pod, so the user container can
+#                                    reach it too; it holds no credential (the
+#                                    write-only key is mounted into Argo's
+#                                    executor containers only).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -58,9 +64,20 @@ spec:
               app: saiep-egress-proxy
       ports:
         - {protocol: TCP, port: 3128}
-    # Argo executor (wait/init) must reach the Kubernetes API to report results.
     - to:
-        - ipBlock:
-            cidr: ${API_SERVER_CIDR}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saiep-storage
+          podSelector:
+            matchLabels:
+              app: saiep-minio
+      ports:
+        - {protocol: TCP, port: 9000}
+    # Argo executor (wait/init) must reach the Kubernetes API to report results.
+    # API_SERVER_PEERS: one ipBlock (/32 or /128) per API server endpoint,
+    # read live from the default/kubernetes EndpointSlice. Re-applied on every
+    # job submission and by "Redéployer la pile SAIEP", so a control-plane
+    # re-IP or an HA change never leaves a tenant pinned to a stale address.
+    - to: ${API_SERVER_PEERS}
       ports:
         - {protocol: TCP, port: ${API_SERVER_PORT}}

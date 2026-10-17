@@ -65,6 +65,20 @@ subjects:
     name: saiep-runner
     namespace: ${NAMESPACE}
 ---
+# MinIO credential for Argo log archiving (controller artifactRepository).
+# Write-only user (PutObject on saiep-artifacts); Argo mounts it into the
+# executor containers only, never into the user's main container, and the
+# tenant role cannot read Secrets.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: saiep-artifacts
+  namespace: ${NAMESPACE}
+type: Opaque
+stringData:
+  accessKey: "${EXECUTOR_ACCESS_KEY}"
+  secretKey: "${EXECUTOR_SECRET_KEY}"
+---
 # Grants the platform user (identity saiep:<username>) read access to their namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

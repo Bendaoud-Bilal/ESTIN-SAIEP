@@ -62,6 +62,13 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [get, create, patch]
+  # Tenant log-archive credential only. Server-side apply is a PATCH that
+  # carries the name, so create can be name-scoped too. No get/list: the hub
+  # cannot read other Secrets.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, patch]
+    resourceNames: [saiep-artifacts]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, create, patch]
@@ -91,6 +98,33 @@ subjects:
     name: saiep-hub
     namespace: saiep-system
 ---
+# Live API server endpoints for the tenant egress rule (k8s.api_server_endpoints):
+# read-only, this one EndpointSlice only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: saiep-hub-apiserver-endpoints
+  namespace: default
+rules:
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get]
+    resourceNames: [kubernetes]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: saiep-hub-apiserver-endpoints
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: saiep-hub-apiserver-endpoints
+subjects:
+  - kind: ServiceAccount
+    name: saiep-hub
+    namespace: saiep-system
+---
 # RBAC cannot scope namespace create/delete by name, so a native admission
 # policy confines the hub identity to tenant namespaces (saiep-u-*): a
 # compromised hub cannot touch kube-system, argo, saiep-system, ...
@@ -105,7 +139,7 @@ spec:
       - apiGroups: ["", rbac.authorization.k8s.io, networking.k8s.io, argoproj.io]
         apiVersions: ["*"]
         operations: [CREATE, UPDATE, DELETE]
-        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, workflows]
+        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, secrets, workflows]
   matchConditions:
     - name: is-saiep-hub
       expression: request.userInfo.username == 'system:serviceaccount:saiep-system:saiep-hub'

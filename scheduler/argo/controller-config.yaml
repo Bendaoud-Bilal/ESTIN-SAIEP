@@ -2,6 +2,12 @@
 # namespaceParallelism caps concurrently running workflows per tenant
 # namespace (one namespace per user), so no user can monopolise a tier;
 # excess workflows stay Pending in Argo's queue.
+#
+# artifactRepository: every pod's main-container log is archived to MinIO
+# (scheduler/storage/minio.yaml) by the Argo executor, so /hub/jobs can
+# still show it after pod GC. The credential Secret "saiep-artifacts" lives
+# in each tenant namespace (tenant bundle); it holds the write-only
+# argo-executor MinIO user and is mounted only into Argo's executor containers.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,3 +20,13 @@ data:
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 250m, memory: 256Mi}
+  artifactRepository: |
+    archiveLogs: true
+    s3:
+      bucket: saiep-artifacts
+      endpoint: saiep-minio.saiep-storage.svc:9000
+      insecure: true
+      region: us-east-1
+      keyFormat: "{{workflow.namespace}}/{{workflow.name}}/{{pod.name}}"
+      accessKeySecret: {name: saiep-artifacts, key: accessKey}
+      secretKeySecret: {name: saiep-artifacts, key: secretKey}

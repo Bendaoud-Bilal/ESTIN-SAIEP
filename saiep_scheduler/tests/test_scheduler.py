@@ -26,9 +26,12 @@ def test_tenant_uid_is_stable_and_in_range():
     assert tenants.UID_BASE <= uid < tenants.UID_BASE + tenants.UID_SPAN
 
 
+EXECUTOR = {'executor_access_key': 'argo-executor', 'executor_secret_key': 's3cr-t_x'}
+
+
 def test_bundle_contains_full_policy_set():
-    bundle = tenants.build_tenant_bundle('alice', tier='phd', api_server_cidr='172.18.0.2/32',
-                                         api_server_port=6443)
+    bundle = tenants.build_tenant_bundle('alice', tier='phd', api_server_cidrs=['172.18.0.2/32'],
+                                         api_server_port=6443, **EXECUTOR)
     kinds = [o['kind'] for o in bundle]
     for kind in ('Namespace', 'ResourceQuota', 'LimitRange', 'ServiceAccount',
                  'RoleBinding', 'NetworkPolicy'):
@@ -42,6 +45,24 @@ def test_bundle_contains_full_policy_set():
     assert all(o['metadata'].get('namespace', 'saiep-u-alice') == 'saiep-u-alice' for o in bundle)
     api = next(o for o in bundle if o['metadata']['name'] == 'saiep-allow-dns-and-proxy')
     assert api['spec']['egress'][-1]['to'][0]['ipBlock']['cidr'] == '172.18.0.2/32'
+
+
+def test_bundle_carries_log_archive_credential_and_minio_egress():
+    bundle = tenants.build_tenant_bundle('alice', **EXECUTOR)
+    secret = next(o for o in bundle if o['kind'] == 'Secret')
+    assert secret['metadata'] == {'name': 'saiep-artifacts', 'namespace': 'saiep-u-alice'}
+    assert secret['stringData'] == {'accessKey': 'argo-executor', 'secretKey': 's3cr-t_x'}
+    egress = next(o for o in bundle if o['metadata']['name'] == 'saiep-allow-dns-and-proxy')
+    minio = [r for r in egress['spec']['egress']
+             if r['to'][0].get('podSelector', {}).get('matchLabels') == {'app': 'saiep-minio'}]
+    assert minio and minio[0]['ports'] == [{'protocol': 'TCP', 'port': 9000}]
+    assert minio[0]['to'][0]['namespaceSelector']['matchLabels'] == {
+        'kubernetes.io/metadata.name': 'saiep-storage'}
+
+
+def test_bundle_requires_executor_credentials():
+    with pytest.raises(ValueError, match='SAIEP_MINIO_EXECUTOR'):
+        tenants.build_tenant_bundle('alice')
 
 
 @pytest.mark.parametrize('q,expected', [('500m', 0.5), ('2', 2), ('0.5', 0.5), ('4Gi', 4 * 2**30),
@@ -60,7 +81,7 @@ def test_check_fits_against_tier_limits():
 
 def test_unknown_tier_rejected():
     with pytest.raises(ValueError):
-        tenants.build_tenant_bundle('alice', tier='vip')
+        tenants.build_tenant_bundle('alice', tier='vip', **EXECUTOR)
 
 
 # --- workflows ---------------------------------------------------------------
@@ -170,3 +191,38 @@ def test_outcome_recorded_once_and_survives_restart(tmp_path):
     assert records.DecisionLog(str(path)).outcome(_wf('Succeeded')) is None
     stages = [json.loads(line)['stage'] for line in path.read_text().splitlines()]
     assert stages == ['intent', 'outcome']
+
+
+class _Store:
+    def __init__(self, fail=0):
+        self.fail, self.puts = fail, []
+
+    def put(self, bucket, key, data, content_type):
+        if self.fail:
+            self.fail -= 1
+            raise records.objectstore.ObjectStoreError('down')
+        self.puts.append((bucket, key, json.loads(data), content_type))
+
+
+def test_records_ship_to_minio_one_object_each_and_stay_local(tmp_path):
+    store = _Store(fail=1)  # first upload attempt fails, retry succeeds
+    shipper = records.RecordShipper(store, backoff=0)
+    log = records.DecisionLog(str(tmp_path / 'd.jsonl'), shipper=shipper)
+    a = log.intent(user='alice', namespace='saiep-u-alice', workflow='w1', request={},
+                   decision='accepted')
+    b = log.outcome(_wf('Succeeded'))
+    shipper.flush()
+    assert [p[2] for p in store.puts] == [a, b]
+    assert {p[0] for p in store.puts} == {'saiep-records'}
+    keys = [p[1] for p in store.puts]
+    assert len(set(keys)) == 2 and all(k.startswith('decisions/') and k.endswith('.json') for k in keys)
+    assert '-intent-' in keys[0] and '-outcome-' in keys[1]
+    assert len((tmp_path / 'd.jsonl').read_text().splitlines()) == 2
+
+
+def test_shipping_failure_keeps_local_record(tmp_path):
+    shipper = records.RecordShipper(_Store(fail=99), attempts=2, backoff=0)
+    log = records.DecisionLog(str(tmp_path / 'd.jsonl'), shipper=shipper)
+    log.intent(user='a', namespace='n', workflow=None, request=None, decision='rejected')
+    shipper.flush()
+    assert len((tmp_path / 'd.jsonl').read_text().splitlines()) == 1

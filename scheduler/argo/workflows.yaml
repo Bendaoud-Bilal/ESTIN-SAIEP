@@ -13,9 +13,9 @@ spec:
   serviceAccountName: saiep-runner
   podGC:
     strategy: OnWorkflowSuccess
-    # Keep pods (and their logs for /hub/jobs) for a day; completed pods
-    # do not count against the namespace pod quota.
-    deleteDelayDuration: 24h
+    # Logs are archived to MinIO (archiveLogs), so pods only linger briefly
+    # for live inspection; /hub/jobs falls back to the archived log.
+    deleteDelayDuration: 10m
   ttlStrategy:
     secondsAfterCompletion: 604800
   arguments:
@@ -54,9 +54,9 @@ spec:
   serviceAccountName: saiep-runner
   podGC:
     strategy: OnWorkflowSuccess
-    # Keep pods (and their logs for /hub/jobs) for a day; completed pods
-    # do not count against the namespace pod quota.
-    deleteDelayDuration: 24h
+    # Logs are archived to MinIO (archiveLogs), so pods only linger briefly
+    # for live inspection; /hub/jobs falls back to the archived log.
+    deleteDelayDuration: 10m
   ttlStrategy:
     secondsAfterCompletion: 604800
   arguments:

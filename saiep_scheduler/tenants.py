@@ -5,6 +5,8 @@ scheduler/tenants/tenant-template.yaml + isolator/network/networkpolicy.yaml,
 using the quota tier from scheduler/policies/quota-tiers.yaml.
 """
 import hashlib
+import ipaddress
+import json
 import os
 import re
 import zlib
@@ -16,6 +18,9 @@ from . import LABEL_DOMAIN, REPO_DIR
 
 NAMESPACE_PREFIX = 'saiep-u-'
 PROVISIONED_LABEL = f'{LABEL_DOMAIN}/provisioned'
+# Bump when the bundle gains objects: older namespaces are re-applied once.
+BUNDLE_VERSION_LABEL = f'{LABEL_DOMAIN}/bundle-version'
+BUNDLE_VERSION = '2'  # 2: MinIO log-archive Secret + MinIO egress
 TENANT_LABEL = f'{LABEL_DOMAIN}/tenant'
 
 TENANT_TEMPLATE = os.path.join(REPO_DIR, 'scheduler', 'tenants', 'tenant-template.yaml')
@@ -85,9 +90,30 @@ def _render(path, values):
     return [doc for doc in yaml.safe_load_all(text) if doc]
 
 
-def build_tenant_bundle(username, tier=None, api_server_cidr='10.96.0.1/32',
-                        api_server_port=443, tiers=None):
+def api_server_cidrs(addresses):
+    """Host CIDRs (/32, /128) for API server endpoint addresses."""
+    return [str(ipaddress.ip_network(a)) for a in addresses]
+
+
+def build_network_policies(namespace, api_server_cidrs=('10.96.0.1/32',), api_server_port=443):
+    """The isolator's NetworkPolicies for one tenant namespace (invariant I-7:
+    content comes only from isolator/network/networkpolicy.yaml)."""
+    if not api_server_cidrs:
+        raise ValueError('at least one API server endpoint is required')
+    peers = [{'ipBlock': {'cidr': cidr}} for cidr in api_server_cidrs]
+    return _render(NETWORK_TEMPLATE, {
+        'NAMESPACE': namespace,
+        'API_SERVER_PEERS': json.dumps(peers),  # JSON is YAML flow syntax
+        'API_SERVER_PORT': int(api_server_port),
+    })
+
+
+def build_tenant_bundle(username, tier=None, api_server_cidrs=('10.96.0.1/32',),
+                        api_server_port=443, tiers=None, executor_access_key='',
+                        executor_secret_key=''):
     """Return the ordered list of objects for a user's namespace."""
+    if not (executor_access_key and executor_secret_key):
+        raise ValueError('MinIO executor credentials (SAIEP_MINIO_EXECUTOR_*) are required')
     tiers = tiers or load_tiers()
     tier = tier or tiers['default_tier']
     if tier not in tiers['tiers']:
@@ -107,7 +133,8 @@ def build_tenant_bundle(username, tier=None, api_server_cidr='10.96.0.1/32',
         'DEFAULT_MEMORY': spec['container_default']['memory'],
         'MAX_CPU': spec['container_max']['cpu'],
         'MAX_MEMORY': spec['container_max']['memory'],
-        'API_SERVER_CIDR': api_server_cidr,
-        'API_SERVER_PORT': api_server_port,
+        'EXECUTOR_ACCESS_KEY': executor_access_key,
+        'EXECUTOR_SECRET_KEY': executor_secret_key,
     }
-    return _render(TENANT_TEMPLATE, values) + _render(NETWORK_TEMPLATE, values)
+    return (_render(TENANT_TEMPLATE, values)
+            + build_network_policies(namespace, api_server_cidrs, api_server_port))
