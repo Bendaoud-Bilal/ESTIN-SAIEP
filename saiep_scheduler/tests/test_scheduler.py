@@ -26,9 +26,12 @@ def test_tenant_uid_is_stable_and_in_range():
     assert tenants.UID_BASE <= uid < tenants.UID_BASE + tenants.UID_SPAN
 
 
+EXECUTOR = {'executor_access_key': 'argo-executor', 'executor_secret_key': 's3cr-t_x'}
+
+
 def test_bundle_contains_full_policy_set():
     bundle = tenants.build_tenant_bundle('alice', tier='phd', api_server_cidr='172.18.0.2/32',
-                                         api_server_port=6443)
+                                         api_server_port=6443, **EXECUTOR)
     kinds = [o['kind'] for o in bundle]
     for kind in ('Namespace', 'ResourceQuota', 'LimitRange', 'ServiceAccount',
                  'RoleBinding', 'NetworkPolicy'):
@@ -42,6 +45,24 @@ def test_bundle_contains_full_policy_set():
     assert all(o['metadata'].get('namespace', 'saiep-u-alice') == 'saiep-u-alice' for o in bundle)
     api = next(o for o in bundle if o['metadata']['name'] == 'saiep-allow-dns-and-proxy')
     assert api['spec']['egress'][-1]['to'][0]['ipBlock']['cidr'] == '172.18.0.2/32'
+
+
+def test_bundle_carries_log_archive_credential_and_minio_egress():
+    bundle = tenants.build_tenant_bundle('alice', **EXECUTOR)
+    secret = next(o for o in bundle if o['kind'] == 'Secret')
+    assert secret['metadata'] == {'name': 'saiep-artifacts', 'namespace': 'saiep-u-alice'}
+    assert secret['stringData'] == {'accessKey': 'argo-executor', 'secretKey': 's3cr-t_x'}
+    egress = next(o for o in bundle if o['metadata']['name'] == 'saiep-allow-dns-and-proxy')
+    minio = [r for r in egress['spec']['egress']
+             if r['to'][0].get('podSelector', {}).get('matchLabels') == {'app': 'saiep-minio'}]
+    assert minio and minio[0]['ports'] == [{'protocol': 'TCP', 'port': 9000}]
+    assert minio[0]['to'][0]['namespaceSelector']['matchLabels'] == {
+        'kubernetes.io/metadata.name': 'saiep-storage'}
+
+
+def test_bundle_requires_executor_credentials():
+    with pytest.raises(ValueError, match='SAIEP_MINIO_EXECUTOR'):
+        tenants.build_tenant_bundle('alice')
 
 
 @pytest.mark.parametrize('q,expected', [('500m', 0.5), ('2', 2), ('0.5', 0.5), ('4Gi', 4 * 2**30),
@@ -60,7 +81,7 @@ def test_check_fits_against_tier_limits():
 
 def test_unknown_tier_rejected():
     with pytest.raises(ValueError):
-        tenants.build_tenant_bundle('alice', tier='vip')
+        tenants.build_tenant_bundle('alice', tier='vip', **EXECUTOR)
 
 
 # --- workflows ---------------------------------------------------------------

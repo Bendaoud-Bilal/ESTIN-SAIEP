@@ -16,6 +16,9 @@ from . import LABEL_DOMAIN, REPO_DIR
 
 NAMESPACE_PREFIX = 'saiep-u-'
 PROVISIONED_LABEL = f'{LABEL_DOMAIN}/provisioned'
+# Bump when the bundle gains objects: older namespaces are re-applied once.
+BUNDLE_VERSION_LABEL = f'{LABEL_DOMAIN}/bundle-version'
+BUNDLE_VERSION = '2'  # 2: MinIO log-archive Secret + MinIO egress
 TENANT_LABEL = f'{LABEL_DOMAIN}/tenant'
 
 TENANT_TEMPLATE = os.path.join(REPO_DIR, 'scheduler', 'tenants', 'tenant-template.yaml')
@@ -86,8 +89,11 @@ def _render(path, values):
 
 
 def build_tenant_bundle(username, tier=None, api_server_cidr='10.96.0.1/32',
-                        api_server_port=443, tiers=None):
+                        api_server_port=443, tiers=None, executor_access_key='',
+                        executor_secret_key=''):
     """Return the ordered list of objects for a user's namespace."""
+    if not (executor_access_key and executor_secret_key):
+        raise ValueError('MinIO executor credentials (SAIEP_MINIO_EXECUTOR_*) are required')
     tiers = tiers or load_tiers()
     tier = tier or tiers['default_tier']
     if tier not in tiers['tiers']:
@@ -109,5 +115,7 @@ def build_tenant_bundle(username, tier=None, api_server_cidr='10.96.0.1/32',
         'MAX_MEMORY': spec['container_max']['memory'],
         'API_SERVER_CIDR': api_server_cidr,
         'API_SERVER_PORT': api_server_port,
+        'EXECUTOR_ACCESS_KEY': executor_access_key,
+        'EXECUTOR_SECRET_KEY': executor_secret_key,
     }
     return _render(TENANT_TEMPLATE, values) + _render(NETWORK_TEMPLATE, values)

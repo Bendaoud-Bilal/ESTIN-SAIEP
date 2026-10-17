@@ -62,6 +62,12 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [get, create, patch]
+  # Tenant log-archive credential only (server-side apply = patch). No get/list:
+  # the hub cannot read other Secrets.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [patch]
+    resourceNames: [saiep-artifacts]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, create, patch]
@@ -105,7 +111,7 @@ spec:
       - apiGroups: ["", rbac.authorization.k8s.io, networking.k8s.io, argoproj.io]
         apiVersions: ["*"]
         operations: [CREATE, UPDATE, DELETE]
-        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, workflows]
+        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, secrets, workflows]
   matchConditions:
     - name: is-saiep-hub
       expression: request.userInfo.username == 'system:serviceaccount:saiep-system:saiep-hub'

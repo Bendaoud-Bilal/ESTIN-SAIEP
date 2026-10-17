@@ -4,6 +4,9 @@ Configured by env:
   SAIEP_KUBECONFIG        kubeconfig for the saiep-hub identity (required to enable jobs)
   SAIEP_API_SERVER_CIDR   API server endpoint CIDR allowed in tenant egress (e.g. 172.18.0.2/32)
   SAIEP_API_SERVER_PORT   API server endpoint port (default 6443)
+  SAIEP_MINIO_EXECUTOR_ACCESS_KEY / _SECRET_KEY
+                          write-only MinIO user copied into each tenant namespace
+                          for Argo log archiving
 """
 import os
 
@@ -46,7 +49,9 @@ class Cluster:
             if e.status == 404:
                 return False
             raise
-        return (ns.metadata.labels or {}).get(tenants.PROVISIONED_LABEL) == 'true'
+        labels = ns.metadata.labels or {}
+        return (labels.get(tenants.PROVISIONED_LABEL) == 'true'
+                and labels.get(tenants.BUNDLE_VERSION_LABEL) == tenants.BUNDLE_VERSION)
 
     def ensure_tenant(self, username, tier=None):
         """Provision the user's namespace atomically (invariant I-8).
@@ -69,12 +74,17 @@ class Cluster:
             tier=tier,
             api_server_cidr=os.environ.get('SAIEP_API_SERVER_CIDR', '10.96.0.1/32'),
             api_server_port=int(os.environ.get('SAIEP_API_SERVER_PORT', '6443')),
+            executor_access_key=os.environ.get('SAIEP_MINIO_EXECUTOR_ACCESS_KEY', ''),
+            executor_secret_key=os.environ.get('SAIEP_MINIO_EXECUTOR_SECRET_KEY', ''),
         )
         try:
             for obj in bundle:
                 self._apply(obj)
             self.core.patch_namespace(
-                namespace, {'metadata': {'labels': {tenants.PROVISIONED_LABEL: 'true'}}}
+                namespace, {'metadata': {'labels': {
+                    tenants.PROVISIONED_LABEL: 'true',
+                    tenants.BUNDLE_VERSION_LABEL: tenants.BUNDLE_VERSION,
+                }}}
             )
         except Exception:
             if not existed:

@@ -6,6 +6,11 @@
 #   outbound internet              : only via the egress proxy (allowlist)
 #   pod-to-pod inside namespace    : permitted
 #   DNS                            : kube-system only
+#   MinIO (saiep-storage) TCP 9000 : Argo executor log archiving. NetworkPolicy
+#                                    is per pod, so the user container can
+#                                    reach it too; it holds no credential (the
+#                                    write-only key is mounted into Argo's
+#                                    executor containers only).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -58,6 +63,15 @@ spec:
               app: saiep-egress-proxy
       ports:
         - {protocol: TCP, port: 3128}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saiep-storage
+          podSelector:
+            matchLabels:
+              app: saiep-minio
+      ports:
+        - {protocol: TCP, port: 9000}
     # Argo executor (wait/init) must reach the Kubernetes API to report results.
     - to:
         - ipBlock:
