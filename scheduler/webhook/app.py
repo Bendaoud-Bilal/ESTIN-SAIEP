@@ -41,6 +41,7 @@ class Policy:
             'SAIEP_IMAGE_ALLOWLIST',
             'docker.io/library/python:,docker.io/library/busybox:,'
             'docker.io/pytorch/pytorch:,docker.io/tensorflow/tensorflow:,'
+            'docker.io/saiep/notebook:,docker.io/saiep/jupyterhub:,'
             'quay.io/argoproj/argoexec:',
         )
         self.priority_classes = set(split('SAIEP_PRIORITY_CLASSES', 'saiep-batch,saiep-background'))

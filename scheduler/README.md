@@ -2,8 +2,10 @@
 
 Decides what runs, where, when and with how much. Implements the adjusted
 "Path 2" design (`ESTIN SAIEP files/Scheduler/apraoch-to-apply-k8s.txt`):
-**every execution request is an Argo Workflow**; there is no direct pod
-path from JupyterHub (notebook servers keep the simple spawner).
+**every batch execution request is an Argo Workflow**; there is no direct pod
+path from JupyterHub. Interactive notebook servers are KubeSpawner Pods in the
+same `saiep-u-<user>` tenant namespace, under the same quota/webhook/isolation
+and with the same log archive.
 
 ## Request pipeline
 
@@ -43,6 +45,17 @@ path from JupyterHub (notebook servers keep the simple spawner).
 | `webhook/deploy.yaml` | Webhook Deployment/Service + Mutating/Validating configurations (tenant namespaces only) |
 
 Hub-side code: `saiep_scheduler/` (builders, k8s access, advisor, records) and `saiep_jobs.py`.
+
+## Interactive notebooks
+
+The Hub itself runs in `saiep-system` and uses `KubeSpawner`
+(`saiep_hub_config.py`, `saiep_scheduler/spawner.py`). Each notebook is a Pod
+in `saiep-u-<user>` with the sizing form's CPU/RAM as requests=limits, the
+duration as `activeDeadlineSeconds`, and a per-user PVC. Notebook Pods go
+through the same admission webhook, ResourceQuota, and NetworkPolicies as jobs.
+Session records are appended to `/srv/jupyterhub/notebook-sessions.jsonl` and
+merged into `/hub/jobs`; logs are archived to `saiep-artifacts` before
+KubeSpawner deletes the Pod.
 
 ## Decisions
 

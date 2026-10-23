@@ -31,6 +31,26 @@ def state(tmp_path, monkeypatch):
     return State(directory=str(tmp_path))
 
 
+def test_hub_manifest_renders_without_placeholders():
+    from string import Template
+    text = Template(open(platform._p('scheduler', 'hub', 'hub.yaml')).read()).substitute(
+        HUB_IMAGE='saiep/jupyterhub:dev',
+        HUB_CONFIG='/app/testing/jupyterhub_config_saiep.py',
+        PUBLIC_URL='http://127.0.0.1:8000',
+        NOTEBOOK_IMAGE='saiep/notebook:dev',
+        STORAGE_CLASS='standard',
+        HUB_STORAGE='5Gi',
+        NOTEBOOK_STORAGE='10Gi',
+    )
+    assert '${' not in text
+    docs = [d for d in yaml.safe_load_all(text) if d]
+    assert [d['kind'] for d in docs] == ['PersistentVolumeClaim', 'Deployment', 'Service']
+    deploy = docs[1]
+    env = {e['name']: e['value'] for e in deploy['spec']['template']['spec']['containers'][0]['env']}
+    assert env['SAIEP_HUB_BIND_API'] == 'http://0.0.0.0:8081'
+    assert env['SAIEP_NOTEBOOK_IMAGE'] == 'saiep/notebook:dev'
+
+
 def test_kind_config_labels_gpu_workers():
     cfg = providers.kind_config(workers=2, gpu_workers=1)
     roles = [n['role'] for n in cfg['nodes']]
@@ -62,6 +82,23 @@ def test_install_only_missing_tools():
     assert tools.install_commands('docker', system='Linux') == []
 
 
+def test_start_docker_enables_service_and_waits(monkeypatch):
+    class DownThenUp(FakeRunner):
+        checks = 0
+
+        def ok(self, cmd, *, echo=True):
+            if cmd == ['docker', 'info']:
+                self.checks += 1
+                return self.checks > 1
+            return True
+
+    r = DownThenUp()
+    monkeypatch.setattr(tools.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(tools.time, 'sleep', lambda _: None)
+    assert tools.start_docker(r, log=lambda *_: None)
+    assert ['sudo', 'systemctl', 'enable', '--now', 'docker'] in r.history
+
+
 def test_render_pins_node_forces_namespace_and_drops_cluster_objects():
     docs = [
         {'kind': 'Deployment', 'metadata': {'name': 'api', 'namespace': 'kube-system'},
@@ -86,6 +123,29 @@ def test_github_blob_url_rewritten_to_raw():
         'https://raw.githubusercontent.com/a/b/main/k8s/app.yaml'
 
 
+def test_load_documents_skips_template_files(tmp_path):
+    (tmp_path / 'app.yaml').write_text(yaml.safe_dump({'apiVersion': 'apps/v1', 'kind': 'Deployment',
+                                                       'metadata': {'name': 'web'}}))
+    # Same shape as isolator/network/networkpolicy.yaml: ${...} inside a flow mapping.
+    (tmp_path / 'template.yaml').write_text(
+        'kind: NetworkPolicy\nspec:\n  egress:\n    - {protocol: TCP, port: ${API_SERVER_PORT}}\n')
+    docs = projects.load_documents(str(tmp_path), FakeRunner(), str(tmp_path / 'work'))
+    assert [d['kind'] for d in docs] == ['Deployment']
+
+
+def test_load_documents_reports_real_invalid_yaml(tmp_path):
+    (tmp_path / 'broken.yaml').write_text('kind: Deployment\nspec: [unclosed\n')
+    with pytest.raises(ValueError, match='YAML invalide'):
+        projects.load_documents(str(tmp_path), FakeRunner(), str(tmp_path / 'work'))
+
+
+def test_platform_repository_is_not_a_project(tmp_path):
+    (tmp_path / 'saiep_cli').mkdir()
+    (tmp_path / 'jupyterhub_config.py').write_text('')
+    with pytest.raises(ValueError, match='plateforme ESTIN-SAIEP'):
+        projects.load_documents(str(tmp_path), FakeRunner(), str(tmp_path / 'work'))
+
+
 def test_project_lifecycle_from_local_path(tmp_path, state):
     src = tmp_path / 'app.yaml'
     src.write_text(yaml.safe_dump({'apiVersion': 'apps/v1', 'kind': 'Deployment',
@@ -102,6 +162,12 @@ def test_project_lifecycle_from_local_path(tmp_path, state):
     projects.uninstall(r, state, 'demo')
     assert ['kubectl', 'delete', 'namespace', 'saiep-p-demo', '--ignore-not-found'] in r.history
     assert 'demo' not in State(directory=state.directory)['projects']
+
+
+def test_empty_project_source_rejected(tmp_path, state):
+    (tmp_path / 'template.yaml').write_text('kind: Pod\nspec: {x: ${VAR}}\n')
+    with pytest.raises(ValueError, match='aucun manifest'):
+        projects.deploy(FakeRunner(), state, 'empty', str(tmp_path), 'saiep-worker')
 
 
 def test_invalid_project_name_rejected(state):

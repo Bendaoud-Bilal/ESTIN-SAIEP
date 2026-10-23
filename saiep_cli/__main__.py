@@ -4,6 +4,11 @@
     python -m saiep_cli --dry-run    # print commands instead of running them
 """
 import argparse
+import os
+import re
+import secrets
+import shlex
+import shutil
 import sys
 
 from rich.console import Console
@@ -11,7 +16,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
-from . import platform, projects, tools
+from . import REPO_DIR, STATE_DIR, platform, projects, tools
 from .providers import KubeadmProvider, get_provider
 from .runner import CommandError, Runner
 from .state import State
@@ -39,6 +44,10 @@ MENU = [
     ('10', 'Désinstaller un projet (et ses dépendances)', 'uninstall'),
     ('11', 'Redéployer la pile SAIEP', 'deploy_stack'),
     ('12', 'Générer le kubeconfig du hub', 'hub_kubeconfig'),
+    ('13', 'Démarrer Docker (démon)', 'start_docker'),
+    ('14', 'Construire les images Hub + Notebook', 'build_hub_images'),
+    ('15', 'Configurer secrets.env (token + kubeconfig)', 'setup_secrets'),
+    ('16', 'Démarrer JupyterHub (cluster + port-forward)', 'run_hub'),
     ('0', 'Quitter', None),
 ]
 
@@ -90,19 +99,40 @@ class Console_:
             self.c.print(f'Outils manquants : {", ".join(missing)}')
             left = tools.fresh_install(self.r, log=self.c.print)
             self.c.print('[green]Terminé.[/]' if not left else f'[yellow]Toujours manquants : {left}[/]')
+        if self.r.which('docker'):
+            if tools.docker_daemon_ok(self.r):
+                self.c.print('[green]Le démon Docker est déjà démarré.[/]')
+            else:
+                self.c.print('[yellow]Docker est installé mais son démon ne tourne pas.[/]')
+                if Confirm.ask('Démarrer Docker maintenant ?', default=True):
+                    tools.start_docker(self.r, log=self.c.print)
         if isinstance(self.provider, KubeadmProvider) and Confirm.ask(
                 'Préparer ce nœud pour kubeadm (swap, containerd, kubelet) ?', default=False):
             from . import KUBERNETES_MINOR
             tools.kubeadm_prepare_node(self.r, KUBERNETES_MINOR)
 
-    def verify(self):
+    def _show_verify(self, results):
         table = Table(title='Vérification', border_style=NAVY)
         table.add_column('Contrôle')
         table.add_column('État')
         table.add_column('Détail', style='dim')
-        for name, ok, detail in tools.verify(self.r):
+        for name, ok, detail in results:
             table.add_row(name, '[green]OK[/]' if ok else f'[{RED}]ÉCHEC[/]', detail)
         self.c.print(table)
+
+    def verify(self):
+        results = tools.verify(self.r)
+        self._show_verify(results)
+        docker_ok = next((ok for name, ok, _ in results if name == 'démon docker'), False)
+        if not docker_ok and self.r.which('docker'):
+            self.c.print('[yellow]Le démon Docker est arrêté. Commandes équivalentes :[/]')
+            self.c.print('  sudo systemctl enable --now docker')
+            self.c.print('  docker info')
+            if Confirm.ask('Démarrer Docker maintenant ?', default=True):
+                if tools.start_docker(self.r, log=self.c.print):
+                    self._show_verify(tools.verify(self.r))
+                else:
+                    self.c.print('[yellow]Consultez : sudo journalctl -u docker -n 100 --no-pager[/]')
 
     def create_cluster(self):
         provider = Prompt.ask('Fournisseur', choices=['kind', 'kubeadm'], default=self.state['provider'])
@@ -184,13 +214,77 @@ class Console_:
 
     def deploy_stack(self):
         falco = Confirm.ask('Installer aussi Falco (détection à l\'exécution) ?', default=False)
-        platform.deploy_stack(self.r, self.provider, log=self.c.print, with_falco=falco)
+        default_hub = 'dev' if getattr(self.provider, 'name', 'kind') == 'kind' else 'prod'
+        hub_mode = Prompt.ask('Hub JupyterHub', choices=['dev', 'prod'], default=default_hub)
+        platform.deploy_stack(self.r, self.provider, log=self.c.print, with_falco=falco,
+                              dev_hub=(hub_mode == 'dev'))
         self.c.print('[green]Pile SAIEP déployée.[/]')
 
     def hub_kubeconfig(self):
         path, env = platform.write_hub_kubeconfig(self.r)
         self.c.print(f'[green]kubeconfig écrit : {path}[/]\nAjoutez à secrets.env :')
         self.c.print('\n'.join(env))
+
+    def start_docker(self):
+        if not self.r.which('docker'):
+            self.c.print('[red]Docker CLI absent. Installez Docker Engine puis relancez.[/]')
+            return
+        if tools.start_docker(self.r, log=self.c.print):
+            self.c.print('[yellow]Si le cluster kind existait déjà, utilisez l\'option 6 pour '
+                         'redémarrer ses nœuds.[/]')
+
+    def build_hub_images(self):
+        platform.build_image(self.r, self.provider, platform.NOTEBOOK_IMAGE,
+                             os.path.join(REPO_DIR, 'notebook', 'Dockerfile'), self.c.print)
+        platform.build_image(self.r, self.provider, platform.HUB_IMAGE,
+                             os.path.join(REPO_DIR, 'hub', 'Dockerfile'), self.c.print)
+        self.c.print('[green]Images Hub + Notebook prêtes.[/]')
+
+    def setup_secrets(self):
+        path = os.path.join(REPO_DIR, 'secrets.env')
+        if not os.path.exists(path):
+            shutil.copyfile(os.path.join(REPO_DIR, 'secrets.env.example'), path)
+            self.c.print('[green]secrets.env créé depuis secrets.env.example.[/]')
+        with open(path) as fh:
+            text = fh.read()
+        token = _env_value(text, 'SAIEP_PROMETHEUS_TOKEN')
+        if not token or token.startswith('replace-'):
+            text = _set_env(text, 'SAIEP_PROMETHEUS_TOKEN', secrets.token_hex(32))
+            self.c.print('[green]SAIEP_PROMETHEUS_TOKEN généré.[/]')
+        else:
+            self.c.print('[green]SAIEP_PROMETHEUS_TOKEN déjà présent (conservé).[/]')
+        kubeconfig = os.path.join(STATE_DIR, 'hub-kubeconfig')
+        if os.path.exists(kubeconfig):
+            text = _set_env(text, 'SAIEP_KUBECONFIG', kubeconfig)
+            self.c.print(f'[green]SAIEP_KUBECONFIG -> {kubeconfig}[/]')
+        if self.r.ok(['kubectl', 'cluster-info', '--request-timeout=5s'], echo=False):
+            if Confirm.ask('Générer aussi le kubeconfig du hub et les variables MinIO ?', default=True):
+                try:
+                    _, lines = platform.write_hub_kubeconfig(self.r)
+                except (CommandError, OSError, KeyError) as exc:
+                    self.c.print(f'[yellow]Kubeconfig non généré : {exc}[/]')
+                else:
+                    for line in lines:
+                        key, _, value = line.removeprefix('export ').partition('=')
+                        text = _set_env(text, key, value)
+                    self.c.print('[green]Kubeconfig et variables MinIO ajoutés à secrets.env.[/]')
+        else:
+            self.c.print('[yellow]Cluster non joignable : token seul configuré. '
+                         'Relancez cette option après l\'option 3.[/]')
+        with open(path, 'w') as fh:
+            fh.write(text)
+        os.chmod(path, 0o600)
+        self.c.print('[green]secrets.env prêt (mode 600).[/]')
+
+    def run_hub(self):
+        if not self.r.ok(['kubectl', '-n', 'saiep-system', 'get', 'deploy', 'jupyterhub'],
+                         echo=False):
+            raise RuntimeError('Hub cluster absent : lancez d\'abord l\'option 3 ou 11.')
+        self.c.print('[green]Hub cluster : http://127.0.0.1:8000 — '
+                     'Ctrl-C pour arrêter le port-forward.[/]')
+        self.c.print('[yellow]Si le port 8000 est déjà utilisé, arrêtez l\'ancien Hub local.[/]')
+        self.r.run(['kubectl', '-n', 'saiep-system', 'port-forward',
+                    'svc/jupyterhub', '8000:8000'], interactive=True, cwd=REPO_DIR)
 
     def loop(self):
         self.header()
@@ -205,6 +299,22 @@ class Console_:
                 self.c.print(f'[bold {RED}]Erreur :[/] {e}')
             except KeyboardInterrupt:
                 self.c.print('\n[yellow]Annulé.[/]')
+
+
+def _env_value(text, key):
+    match = re.search(rf'^\s*export\s+{re.escape(key)}=(.*)$', text, re.M)
+    return match.group(1).strip().strip('"').strip("'") if match else ''
+
+
+def _set_env(text, key, value):
+    """Update or append ``export KEY=value`` in a shell env file."""
+    line = f'export {key}={shlex.quote(str(value))}'
+    pattern = re.compile(rf'^\s*export\s+{re.escape(key)}=.*$', re.M)
+    if pattern.search(text):
+        return pattern.sub(line, text, count=1)
+    if text and not text.endswith('\n'):
+        text += '\n'
+    return text + line + '\n'
 
 
 def main(argv=None):

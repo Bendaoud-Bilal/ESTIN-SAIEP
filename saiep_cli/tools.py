@@ -7,6 +7,7 @@ For a kubeadm (bare-metal) node, kubeadm_prepare_node() runs the OS +
 containerd + kubeadm phases from the team's install notes.
 """
 import platform
+import time
 
 from . import HELM_VERSION, KIND_VERSION
 
@@ -60,6 +61,52 @@ def fresh_install(runner, log=print):
     return missing_tools(runner)
 
 
+def docker_daemon_ok(runner):
+    """True when the Docker daemon answers (not just the CLI being installed)."""
+    return runner.ok(['docker', 'info'], echo=False)
+
+
+def start_docker(runner, log=print, wait=20):
+    """Start the Docker daemon, wait for it, and show logs if it stays down.
+
+    Linux uses systemd (the distro package installed by the SAIEP docs);
+    macOS opens Docker Desktop. The Docker CLI must already be installed.
+    """
+    if not runner.which('docker'):
+        log('[yellow]Docker CLI absent : installez Docker Engine puis relancez.[/]')
+        return False
+    if docker_daemon_ok(runner):
+        log('[green]Le démon Docker est déjà démarré.[/]')
+        return True
+
+    system = platform.system().lower()
+    log('Démarrage du démon Docker…')
+    try:
+        if system == 'darwin':
+            runner.run(['open', '-a', 'Docker'], check=False, capture=False)
+        else:
+            runner.run(['sudo', 'systemctl', 'enable', '--now', 'docker'],
+                       check=False, capture=False)
+    except OSError as exc:
+        log(f'[red]Impossible de lancer Docker : {exc}[/]')
+        return False
+
+    for _ in range(max(1, wait)):
+        time.sleep(1)
+        if docker_daemon_ok(runner):
+            log('[green]Docker est prêt.[/]')
+            return True
+
+    log('[red]Le démon Docker ne répond toujours pas.[/]')
+    if system != 'darwin':
+        log('[yellow]Diagnostic :[/]')
+        runner.run(['sudo', 'systemctl', 'status', 'docker', '--no-pager'],
+                   check=False, capture=False)
+        runner.run(['sudo', 'journalctl', '-u', 'docker', '-n', '100', '--no-pager'],
+                   check=False, capture=False)
+    return False
+
+
 def kubeadm_prepare_node(runner, k8s_minor):
     """OS prep + containerd + kubeadm/kubelet/kubectl on a Debian/Ubuntu node (needs sudo)."""
     script = f"""set -e
@@ -98,6 +145,7 @@ def verify(runner, kubeconfig_ok=True):
         ('Argo Workflows', ['kubectl', '-n', 'argo', 'rollout', 'status', 'deploy/workflow-controller', '--timeout=5s']),
         ('Modèles de calcul', ['kubectl', 'get', 'clusterworkflowtemplate', 'saiep-cpu-job', 'saiep-gpu-job']),
         ('Webhook d\'admission', ['kubectl', '-n', 'saiep-system', 'rollout', 'status', 'deploy/saiep-admission', '--timeout=5s']),
+        ('JupyterHub (KubeSpawner)', ['kubectl', '-n', 'saiep-system', 'rollout', 'status', 'deploy/jupyterhub', '--timeout=5s']),
         ('Proxy de sortie', ['kubectl', '-n', 'saiep-egress', 'rollout', 'status', 'deploy/saiep-egress-proxy', '--timeout=5s']),
         ('RuntimeClass gVisor', ['kubectl', 'get', 'runtimeclass', 'gvisor']),
     ]

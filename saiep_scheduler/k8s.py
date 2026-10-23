@@ -23,14 +23,23 @@ FIELD_MANAGER = 'saiep-scheduler'
 ARGO_GROUP, ARGO_VERSION, WF_PLURAL = 'argoproj.io', 'v1alpha1', 'workflows'
 
 
+IN_CLUSTER_TOKEN = '/var/run/secrets/kubernetes.io/serviceaccount/token'
+
+
 def enabled():
-    return bool(os.environ.get('SAIEP_KUBECONFIG'))
+    return bool(os.environ.get('SAIEP_KUBECONFIG') or os.path.exists(IN_CLUSTER_TOKEN))
 
 
 class Cluster:
     def __init__(self, kubeconfig=None):
-        kubeconfig = kubeconfig or os.environ['SAIEP_KUBECONFIG']
-        self.api_client = config.new_client_from_config(config_file=kubeconfig)
+        kubeconfig = kubeconfig or os.environ.get('SAIEP_KUBECONFIG')
+        if kubeconfig:
+            self.api_client = config.new_client_from_config(config_file=kubeconfig)
+        else:
+            # The Hub runs as a Pod in the cluster (KubeSpawner needs to reach
+            # notebook Pod IPs directly), so use its ServiceAccount.
+            config.load_incluster_config()
+            self.api_client = client.ApiClient()
         self.core = client.CoreV1Api(self.api_client)
         self.discovery = client.DiscoveryV1Api(self.api_client)
         self.custom = client.CustomObjectsApi(self.api_client)
@@ -122,6 +131,18 @@ class Cluster:
         return namespace
 
     # --- workflows -----------------------------------------------------------
+    def notebook_pods(self, namespace):
+        """Live KubeSpawner notebook Pods, keyed by Pod name -> phase."""
+        try:
+            items = self.core.list_namespaced_pod(
+                namespace, label_selector='saiep.estin.dz/workload=notebook'
+            ).items
+        except ApiException as e:
+            if e.status == 404:
+                return {}
+            raise
+        return {pod.metadata.name: pod.status.phase for pod in items}
+
     def submit(self, workflow):
         return self.custom.create_namespaced_custom_object(
             ARGO_GROUP, ARGO_VERSION, workflow['metadata']['namespace'], WF_PLURAL, workflow
@@ -149,6 +170,16 @@ class Cluster:
             ARGO_GROUP, ARGO_VERSION, namespace, WF_PLURAL, name
         )
 
+    def pod_logs(self, namespace, pod_name, tail_lines=500, container=None):
+        """Logs of a bare KubeSpawner notebook Pod (not an Argo workflow)."""
+        pod = self.core.read_namespaced_pod(pod_name, namespace)
+        containers = [c.name for c in (pod.spec.containers or [])]
+        if container is None:
+            container = 'notebook' if 'notebook' in containers else (containers[0] if containers else None)
+        return self.core.read_namespaced_pod_log(
+            pod_name, namespace, container=container, tail_lines=tail_lines
+        )
+
     def logs(self, namespace, name, tail_lines=500, store=None):
         """Main-container logs of every pod of the workflow: live pods from
         the API, garbage-collected ones from the MinIO archive (archiveLogs)."""
@@ -156,15 +187,26 @@ class Cluster:
             namespace, label_selector=f'workflows.argoproj.io/workflow={name}'
         ).items
         entries = []
+        live = set()
         for pod in pods:
+            pod_name = pod.metadata.name
             try:
                 text = self.core.read_namespaced_pod_log(
-                    pod.metadata.name, namespace, container='main', tail_lines=tail_lines
+                    pod_name, namespace, container='main', tail_lines=tail_lines
                 )
             except ApiException as e:
-                text = f'(journal indisponible: {e.reason})'
-            entries.append((pod.metadata.creation_timestamp.isoformat(), pod.metadata.name, text))
-        live = {pod_name for _, pod_name, _ in entries}
+                if e.status == 404:
+                    # Logs already gone: let the archive fallback below handle it.
+                    continue
+                if e.status == 400:
+                    # Kubelet returns 400 while the main container is still starting.
+                    text = '(journal pas encore disponible : le conteneur démarre)'
+                else:
+                    text = f'(journal indisponible: {e.reason})'
+                live.add(pod_name)  # do not duplicate this pod from the archive
+            else:
+                live.add(pod_name)
+            entries.append((pod.metadata.creation_timestamp.isoformat(), pod_name, text))
         if store is None and objectstore.enabled():
             store = objectstore.ObjectStore()
         if store is not None:

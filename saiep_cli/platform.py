@@ -18,6 +18,8 @@ from . import ARGO_VERSION, REPO_DIR, STATE_DIR
 
 ARGO_INSTALL = f'https://github.com/argoproj/argo-workflows/releases/download/{ARGO_VERSION}/install.yaml'
 WEBHOOK_IMAGE = os.environ.get('SAIEP_WEBHOOK_IMAGE', 'saiep/admission-webhook:dev')
+HUB_IMAGE = os.environ.get('SAIEP_HUB_IMAGE', 'saiep/jupyterhub:dev')
+NOTEBOOK_IMAGE = os.environ.get('SAIEP_NOTEBOOK_IMAGE', 'saiep/notebook:dev')
 WEBHOOK_SVC = 'saiep-admission.saiep-system.svc'
 EGRESS_PROXY_URL = 'http://saiep-egress-proxy.saiep-egress.svc.cluster.local:3128'
 MINIO_NS, MINIO_SVC = 'saiep-storage', 'saiep-minio'
@@ -90,6 +92,78 @@ def _secret(name, namespace, data):
                        'metadata': {'name': name, 'namespace': namespace}, 'stringData': data})
 
 
+def _env_file(path=None):
+    """Read the simple ``export KEY=value`` file used by secrets.env."""
+    path = path or _p('secrets.env')
+    values = {}
+    if not os.path.exists(path):
+        return values
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith('export '):
+                line = line[7:].strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def hub_env(dev=True):
+    """Environment injected into the in-cluster JupyterHub Pod."""
+    local = _env_file()
+    token = (os.environ.get('SAIEP_PROMETHEUS_TOKEN') or local.get('SAIEP_PROMETHEUS_TOKEN')
+             or secrets.token_hex(32))
+    password = (os.environ.get('SAIEP_DEV_PASSWORD') or local.get('SAIEP_DEV_PASSWORD')
+                or 'devpass')
+    creds = minio_credentials()
+    env = {
+        'SAIEP_PROMETHEUS_TOKEN': token,
+        'SAIEP_MINIO_ENDPOINT': f'http://{MINIO_SVC}.{MINIO_NS}.svc.cluster.local:9000',
+        'SAIEP_MINIO_ACCESS_KEY': creds['hubAccessKey'],
+        'SAIEP_MINIO_SECRET_KEY': creds['hubSecretKey'],
+        'SAIEP_MINIO_EXECUTOR_ACCESS_KEY': creds['executorAccessKey'],
+        'SAIEP_MINIO_EXECUTOR_SECRET_KEY': creds['executorSecretKey'],
+        'SAIEP_DEV_PASSWORD': password,
+    }
+    return env
+
+
+def build_image(runner, provider, image, dockerfile, log=print):
+    log(f'Construction de l\'image {image}…')
+    runner.run(['docker', 'build', '-t', image, '-f', dockerfile, REPO_DIR], capture=False)
+    try:
+        provider.load_image(image)
+    except RuntimeError as exc:
+        log(f'[yellow]{exc}[/]')
+
+
+def deploy_hub(runner, provider, log=print, dev=True, build=True):
+    """Build the Hub/notebook images and deploy the in-cluster Hub."""
+    if build:
+        build_image(runner, provider, NOTEBOOK_IMAGE, _p('notebook', 'Dockerfile'), log)
+        build_image(runner, provider, HUB_IMAGE, _p('hub', 'Dockerfile'), log)
+
+    runner.run(['kubectl', 'create', 'namespace', 'saiep-system'], check=False)
+    apply_text(runner, _secret('saiep-hub-env', 'saiep-system', hub_env(dev=dev)))
+    text = Template(open(_p('scheduler', 'hub', 'hub.yaml')).read()).substitute(
+        HUB_IMAGE=HUB_IMAGE,
+        HUB_CONFIG=('/app/testing/jupyterhub_config_saiep.py' if dev
+                    else '/app/jupyterhub_config.py'),
+        PUBLIC_URL=('http://127.0.0.1:8000' if dev
+                    else os.environ.get('SAIEP_HUB_PUBLIC_URL', 'https://104.248.22.193.sslip.io')),
+        NOTEBOOK_IMAGE=NOTEBOOK_IMAGE,
+        STORAGE_CLASS=os.environ.get('SAIEP_STORAGE_CLASS', 'standard'),
+        HUB_STORAGE=os.environ.get('SAIEP_HUB_STORAGE', '5Gi'),
+        NOTEBOOK_STORAGE=os.environ.get('SAIEP_NOTEBOOK_STORAGE', '10Gi'),
+    )
+    apply_text(runner, text)
+    runner.run(['kubectl', '-n', 'saiep-system', 'rollout', 'status', 'deploy/jupyterhub',
+                '--timeout=600s'])
+    log('[green]JupyterHub (KubeSpawner) déployé dans saiep-system.[/]')
+
+
 def deploy_minio(runner):
     creds = minio_credentials()
     runner.run(['kubectl', 'create', 'namespace', MINIO_NS], check=False)
@@ -105,7 +179,8 @@ def deploy_minio(runner):
                 '--timeout=300s'])
 
 
-def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=False):
+def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=False,
+                 with_hub=True, dev_hub=None):
     log('1/7 Priorités et rôles…')
     apply_file(runner, _p('scheduler', 'policies', 'priorityclass.yaml'))
     apply_file(runner, _p('scheduler', 'rbac.yaml'))
@@ -153,6 +228,11 @@ def deploy_stack(runner, provider, log=print, sandbox_runtime='', with_falco=Fal
                     '--create-namespace', '-f', _p('isolator', 'security', 'falco.yaml')], capture=False)
     else:
         log('7/7 Falco ignoré (optionnel).')
+
+    if with_hub:
+        log('8/8 JupyterHub + notebooks KubeSpawner…')
+        dev = dev_hub if dev_hub is not None else getattr(provider, 'name', 'kind') == 'kind'
+        deploy_hub(runner, provider, log=log, dev=dev)
 
 
 def api_server_endpoint(runner):

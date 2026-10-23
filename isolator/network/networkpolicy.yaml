@@ -32,9 +32,24 @@ spec:
   ingress:
     - from:
         - podSelector: {}
+    # The Hub (in saiep-system) proxies /user/<name>/ to the notebook Pod.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saiep-system
+      ports:
+        - {protocol: TCP, port: 8888}
   egress:
     - to:
         - podSelector: {}
+    # Notebook servers call the Hub API (JUPYTERHUB_API_URL) and connect to
+    # the Hub's internal websocket/proxy endpoints.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saiep-system
+      ports:
+        - {protocol: TCP, port: 8081}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

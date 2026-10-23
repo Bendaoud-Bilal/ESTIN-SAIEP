@@ -41,24 +41,52 @@ def _github_raw(url):
     return f'https://raw.githubusercontent.com/{m[1]}/{m[2]}/{m[3]}' if m else url
 
 
+def _is_platform_repo(root):
+    """True for the ESTIN-SAIEP platform checkout (not an application repo)."""
+    return (os.path.isdir(os.path.join(root, 'saiep_cli'))
+            and os.path.exists(os.path.join(root, 'jupyterhub_config.py')))
+
+
 def load_documents(source, runner, workdir):
-    """Return YAML docs from a URL, git repo or local path."""
+    """Return deployable YAML docs from a URL, git repo or local path.
+
+    Platform manifests are templates rendered by saiep_cli (they contain
+    ``${...}`` placeholders), not valid YAML on their own. Skip those files
+    instead of aborting the whole import; real malformed app manifests still
+    raise a clear error with the file name.
+    """
     texts = []
     if source.startswith(('http://', 'https://')) and source.endswith(('.yaml', '.yml')):
         with urllib.request.urlopen(_github_raw(source), timeout=30) as resp:
-            texts.append(resp.read(5 * 1024 * 1024).decode())
+            texts.append((source, resp.read(5 * 1024 * 1024).decode()))
     elif source.startswith(('https://', 'git@')):
         runner.run(['rm', '-rf', workdir], check=False)
         runner.run(['git', 'clone', '--depth', '1', source, workdir], capture=False)
+        if _is_platform_repo(workdir):
+            raise ValueError(
+                'ce dépôt est la plateforme ESTIN-SAIEP elle-même, pas une application. '
+                'Utilisez l\'option 3 pour la créer ou l\'option 11 pour la redéployer.'
+            )
         texts += _read_tree(workdir)
     elif os.path.isdir(source):
+        if _is_platform_repo(source):
+            raise ValueError(
+                'ce chemin est la plateforme ESTIN-SAIEP elle-même, pas une application. '
+                'Utilisez l\'option 3 pour la créer ou l\'option 11 pour la redéployer.'
+            )
         texts += _read_tree(source)
     else:
         with open(source) as fh:
-            texts.append(fh.read())
+            texts.append((source, fh.read()))
     docs = []
-    for text in texts:
-        docs += [d for d in yaml.safe_load_all(text) if isinstance(d, dict) and d.get('kind')]
+    for label, text in texts:
+        if '${' in text:  # saiep_cli/string.Template manifest, not a plain manifest
+            continue
+        try:
+            loaded = list(yaml.safe_load_all(text))
+        except yaml.YAMLError as exc:
+            raise ValueError(f'YAML invalide dans {label} : {exc}') from exc
+        docs += [d for d in loaded if isinstance(d, dict) and d.get('kind')]
     return docs
 
 
@@ -68,7 +96,7 @@ def _read_tree(root):
         if '/.git' in path or '/.github' in path:
             continue
         with open(path) as fh:
-            out.append(fh.read())
+            out.append((path, fh.read()))
     return out
 
 
@@ -107,6 +135,9 @@ def deploy(runner, state, project, source, node):
         raise ValueError('nom de projet invalide (a-z, 0-9, -)')
     os.makedirs(os.path.join(STATE_DIR, 'projects'), mode=0o700, exist_ok=True)
     docs = load_documents(source, runner, os.path.join(STATE_DIR, 'projects', f'{project}-src'))
+    if not docs:
+        raise ValueError('aucun manifest Kubernetes déployable trouvé '
+                         '(les fichiers modèles avec ${...} sont ignorés).')
     rendered, skipped = render(project, docs, node)
     path = manifest_path(project)
     with open(path, 'w') as fh:

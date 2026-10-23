@@ -2,16 +2,18 @@
 VENV="$(dirname "$0")/venv"
 SHARE="$(dirname "$0")/share/jupyterhub/static"
 STATIC_IMG="$SHARE/img/logo-estin.png"
+PY="$VENV/bin/python"
+[ -x "$PY" ] || PY=python3
 echo "=== Setup UI SAIEP ==="
 echo "[1/4] Favicon JupyterHub..."
-python3 -c "
+"$PY" -c "
 from PIL import Image
 img = Image.open('$STATIC_IMG')
 img = img.resize((32, 32))
 img.save('$SHARE/favicon.ico', format='ICO')
 "
 echo "[2/4] Favicon JupyterLab..."
-python3 -c "
+"$PY" -c "
 from PIL import Image
 img = Image.open('$STATIC_IMG')
 img = img.resize((32, 32))

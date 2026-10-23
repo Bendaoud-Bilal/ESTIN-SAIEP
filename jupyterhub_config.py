@@ -12,12 +12,13 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 # Native SAIEP admin interface (resources + monitoring) lives in saiep_admin.py
 sys.path.insert(0, base_dir)
 import saiep_admin
-# Job intake → Argo Workflows (Scheduling Layer, Path 2). Enabled when
-# SAIEP_KUBECONFIG is set (see secrets.env.example).
+import saiep_hub_config
+# Job intake → Argo Workflows (Scheduling Layer, Path 2). Enabled when the Hub
+# runs in-cluster or SAIEP_KUBECONFIG is set (see secrets.env.example).
 import saiep_jobs
 
-PUBLIC_URL = 'https://104.248.22.193.sslip.io'
-INTERNAL_HUB_URL = 'http://172.17.0.1:8000'
+PUBLIC_URL = os.environ.get('SAIEP_HUB_PUBLIC_URL', 'https://104.248.22.193.sslip.io')
+INTERNAL_HUB_URL = os.environ.get('SAIEP_HUB_BIND_URL', 'http://0.0.0.0:8000')
 
 # Secrets are injected from secrets.env (sourced by start-hub.sh) and are NOT
 # committed to git. See secrets.env.example for the expected variables.
@@ -25,13 +26,21 @@ PROMETHEUS_TOKEN = os.environ['SAIEP_PROMETHEUS_TOKEN']
 
 c.JupyterHub.template_paths = [os.path.join(base_dir, 'templates')]
 
-# Bind to the Docker bridge gateway only — reachable by the Caddy HTTPS proxy
-# (and the host), NOT directly from the public internet.
-c.JupyterHub.bind_url = 'http://172.17.0.1:8000'
+# The Hub runs as a Pod; Caddy/port-forward reaches it through the Service.
+c.JupyterHub.bind_url = INTERNAL_HUB_URL
+c.JupyterHub.public_url = PUBLIC_URL
 
 # Caddy terminates TLS and forwards X-Forwarded-Proto=https so the Hub
 # issues secure cookies and correct redirects.
-c.JupyterHub.trusted_downstream_ips = ['172.17.0.0/16', '127.0.0.1']
+c.JupyterHub.trusted_downstream_ips = ['172.17.0.0/16', '127.0.0.1', '10.0.0.0/8']
+
+# Persistent Hub state lives on the saiep-hub-data PVC.
+c.JupyterHub.db_url = os.environ.get(
+    'SAIEP_HUB_DB', 'sqlite:////srv/jupyterhub/jupyterhub.sqlite'
+)
+c.JupyterHub.cookie_secret_file = os.environ.get(
+    'SAIEP_HUB_COOKIE_SECRET', '/srv/jupyterhub/jupyterhub_cookie_secret'
+)
 
 # --- Authentication: demande d'inscription + activation par l'admin -------
 # Workflow demanded by LITAN: users request an account at /hub/signup with
@@ -135,78 +144,11 @@ def default_url(handler):
 
 c.JupyterHub.default_url = default_url
 
-# --- Spawner + formulaire de dimensionnement -------------------------------
-# Before each server starts, the user fills a sizing form (CPU/RAM/duration/
-# usage). Requests are persisted to spawn-requests.jsonl: this is the dataset
-# the future AI sizing model will train on.
-SPAWN_REQUESTS_LOG = os.path.join(base_dir, 'spawn-requests.jsonl')
-
-SIZING_FORM = """
-<div class="saiep-sizing-form">
-  <p>Veuillez dimensionner votre espace d'exécution :</p>
-  <label for="cpu">Processeur (vCPU) :</label>
-  <select name="cpu" class="form-control">
-    <option value="0.5">0.5 vCPU</option>
-    <option value="1" selected>1 vCPU</option>
-    <option value="2">2 vCPU</option>
-  </select>
-  <br/>
-  <label for="memory">Mémoire (RAM) :</label>
-  <select name="memory" class="form-control">
-    <option value="512M">512 Mo</option>
-    <option value="1G" selected>1 Go</option>
-    <option value="2G">2 Go</option>
-    <option value="4G">4 Go</option>
-  </select>
-  <br/>
-  <label for="duration">Durée estimée d'utilisation :</label>
-  <select name="duration" class="form-control">
-    <option value="1h" selected>1 heure</option>
-    <option value="4h">4 heures</option>
-    <option value="1d">1 journée</option>
-    <option value="1w">1 semaine</option>
-  </select>
-  <br/>
-  <label for="usage">Description de l'usage (librairies, type de calcul, dataset...) :</label>
-  <textarea name="usage" class="form-control" rows="3"
-    placeholder="Ex: entraînement d'un modèle scikit-learn sur un CSV de 200 Mo"></textarea>
-</div>
-"""
-
-def options_from_form(formdata):
-    options = {
-        'cpu': formdata.get('cpu', ['1'])[0],
-        'memory': formdata.get('memory', ['1G'])[0],
-        'duration': formdata.get('duration', ['1h'])[0],
-        'usage': formdata.get('usage', [''])[0][:2000],
-    }
-    return options
-
-def pre_spawn_hook(spawner):
-    """Record every sizing request (training data for the future AI model)
-    and pass the requested limits to the user's environment."""
-    options = spawner.user_options or {}
-    record = {
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'user': spawner.user.name,
-        'options': options,
-    }
-    try:
-        with open(SPAWN_REQUESTS_LOG, 'a') as f:
-            f.write(json.dumps(record, ensure_ascii=False) + '\n')
-    except OSError:
-        spawner.log.warning('Could not persist spawn sizing request')
-    spawner.environment.update({
-        'SAIEP_CPU_REQUEST': str(options.get('cpu', '')),
-        'SAIEP_MEM_REQUEST': str(options.get('memory', '')),
-    })
-
-c.JupyterHub.spawner_class = 'simple'
-c.Spawner.cmd = [os.path.join(base_dir, 'venv/bin/jupyterhub-singleuser')]
-c.Spawner.default_url = '/lab'
-c.Spawner.options_form = SIZING_FORM
-c.Spawner.options_from_form = options_from_form
-c.Spawner.pre_spawn_hook = pre_spawn_hook
+# --- Spawner: KubeSpawner notebooks in saiep-u-<user> ----------------------
+# CPU/RAM from the sizing form become Pod requests=limits; the duration becomes
+# the Pod activeDeadlineSeconds. The Hub must run in-cluster so it can reach
+# each notebook Pod directly.
+saiep_hub_config.configure(c, base_dir)
 
 # --- Monitoring : interface NATIVE SAIEP (Grafana supprimé) ----------------
 # Plus aucun outil tiers : le monitoring est notre propre interface

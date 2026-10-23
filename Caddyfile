@@ -9,8 +9,10 @@
 }
 
 104.248.22.193.sslip.io {
-	# Tout passe par JupyterHub. Grafana est intégré et servi par le hub
-	# lui-même sous /services/monitoring (SSO JupyterHub) — il n'est plus
-	# exposé en direct.
-	reverse_proxy 172.17.0.1:8000
+	# Tout passe par JupyterHub. Le Hub tourne maintenant dans Kubernetes
+	# (Deployment jupyterhub, Service NodePort 30080). Sur un nœud kubeadm
+	# unique, le NodePort écoute sur 127.0.0.1:30080.
+	# Pour kind, exposez le service avec :
+	#   kubectl -n saiep-system port-forward svc/jupyterhub 30080:8000
+	reverse_proxy 127.0.0.1:30080
 }

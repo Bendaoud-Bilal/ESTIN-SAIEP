@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from kubernetes.client.rest import ApiException
+
 from saiep_scheduler import k8s, objectstore
 
 NS, WF = 'saiep-u-alice', 'train-abc'
@@ -68,6 +70,18 @@ def test_missing_archive_is_reported_not_raised():
     k1 = f'{NS}/{WF}/pod-1/main.log'
     text = _cluster([], _workflow(_node('pod-1', k1, 't'))).logs(NS, WF, store=FakeStore({}))
     assert 'journal archivé indisponible' in text
+
+
+def test_logs_explains_container_starting_instead_of_bad_request():
+    c = _cluster(['pod-1'], {})
+
+    def starting(*args, **kwargs):
+        raise ApiException(status=400, reason='Bad Request')
+
+    c.core.read_namespaced_pod_log = starting
+    text = c.logs(NS, WF)
+    assert 'conteneur démarre' in text
+    assert 'Bad Request' not in text
 
 
 def test_logs_without_store_configured_use_live_pods_only(monkeypatch):

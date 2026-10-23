@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Starts JupyterHub (behind the Caddy HTTPS proxy) detached so it survives logout.
-cd "$(dirname "$0")"
-export PATH="$HOME/.local/node/bin:$PATH"
-# Load secrets (tokens) — not committed to git. See secrets.env.example.
-[ -f secrets.env ] && source secrets.env
-exec ./venv/bin/jupyterhub -f jupyterhub_config.py
+# JupyterHub runs inside Kubernetes (Deployment saiep-system/jupyterhub).
+# This helper only exposes its UI on http://127.0.0.1:8000 for local access.
+cd "$(dirname "$0")" || exit 1
+if ! kubectl -n saiep-system get deploy/jupyterhub >/dev/null 2>&1; then
+    echo "Hub Kubernetes absent : lancez 'python -m saiep_cli' (option 3 ou 11)." >&2
+    exit 1
+fi
+exec kubectl -n saiep-system port-forward svc/jupyterhub 8000:8000

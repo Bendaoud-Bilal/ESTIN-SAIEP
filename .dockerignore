@@ -2,8 +2,14 @@ examples
 bench
 jupyterhub_cookie_secret
 jupyterhub.sqlite
-jupyterhub_config.py
 node_modules
 docs
 dist
 build
+venv
+.git
+secrets.env
+*.jsonl
+__pycache__
+*.pyc
+jupyterhub.log

@@ -19,7 +19,7 @@ import re
 from tornado import web
 
 from jupyterhub.handlers import BaseHandler
-from saiep_scheduler import advisor, k8s, objectstore, records, tenants, workflows
+from saiep_scheduler import advisor, k8s, notebooks, objectstore, records, tenants, workflows
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DECISIONS_LOG = os.path.join(BASE_DIR, 'scheduling-decisions.jsonl')
@@ -70,6 +70,7 @@ def _summary(wf):
     params = {p['name']: p.get('value') for p in wf.get('spec', {}).get('arguments', {}).get('parameters', [])}
     labels = meta.get('labels') or {}
     return {
+        'kind': 'workflow',
         'name': meta.get('name'),
         'job': labels.get('saiep.estin.dz/job', ''),
         'tier': labels.get('saiep.estin.dz/tier', ''),
@@ -98,6 +99,10 @@ class _JobsBase(BaseHandler):
         if not k8s.enabled():
             raise web.HTTPError(503, 'Cluster SAIEP non configuré')
 
+    def _notebook(self, name):
+        record = notebooks.find(name)
+        return record if record and record.get('namespace') == self._namespace() else None
+
 
 class JobsPageHandler(_JobsBase):
     @web.authenticated
@@ -121,7 +126,11 @@ class JobsListHandler(_JobsBase):
         decisions = _get_decisions()
         for wf in items:
             decisions.outcome(wf)  # metrics emitter: records each termination once
-        jobs = sorted((_summary(w) for w in items), key=lambda j: j['created'] or '', reverse=True)
+        jobs = [_summary(w) for w in items]
+        live = await _run(_get_cluster().notebook_pods, self._namespace())
+        jobs += [j for j in notebooks.sessions(live=live)
+                 if j.get('namespace') == self._namespace()]
+        jobs.sort(key=lambda j: j.get('created') or '', reverse=True)
         self._json({'jobs': jobs})
 
 
@@ -169,7 +178,10 @@ class JobsLogsHandler(_JobsBase):
         self._require_enabled()
         if not _WF_NAME.match(name):
             raise web.HTTPError(400, 'nom invalide')
-        text = await _run(_get_cluster().logs, self._namespace(), name)
+        if self._notebook(name):
+            text = await _run(notebooks.read_log, self._namespace(), name)
+        else:
+            text = await _run(_get_cluster().logs, self._namespace(), name)
         self._json({'logs': text})
 
 
@@ -179,7 +191,13 @@ class JobsStopHandler(_JobsBase):
         self._require_enabled()
         if not _WF_NAME.match(name):
             raise web.HTTPError(400, 'nom invalide')
-        await _run(_get_cluster().stop, self._namespace(), name)
+        if self._notebook(name):
+            spawner = self.current_user.spawner
+            if not spawner or getattr(spawner, 'pod_name', None) != name:
+                raise web.HTTPError(404, 'serveur notebook arrêté')
+            await spawner.stop()
+        else:
+            await _run(_get_cluster().stop, self._namespace(), name)
         self._json({'stopped': name})
 
 

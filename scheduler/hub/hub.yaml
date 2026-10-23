@@ -1,0 +1,99 @@
+# SAIEP JupyterHub (in-cluster) + KubeSpawner notebook control plane.
+# Placeholders are rendered by saiep_cli.platform.deploy_hub().
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: saiep-hub-data
+  namespace: saiep-system
+  labels: {app.kubernetes.io/part-of: saiep}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ${STORAGE_CLASS}
+  resources:
+    requests: {storage: ${HUB_STORAGE}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyterhub
+  namespace: saiep-system
+  labels: {app: jupyterhub, app.kubernetes.io/part-of: saiep}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}  # SQLite on a RWO volume
+  selector:
+    matchLabels: {app: jupyterhub}
+  template:
+    metadata:
+      labels: {app: jupyterhub, app.kubernetes.io/part-of: saiep}
+    spec:
+      serviceAccountName: saiep-hub
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: hub
+          image: ${HUB_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["jupyterhub"]
+          args: ["-f", "${HUB_CONFIG}"]
+          env:
+            - {name: SAIEP_IN_CLUSTER, value: "1"}
+            - {name: SAIEP_HUB_PUBLIC_URL, value: "${PUBLIC_URL}"}
+            - {name: SAIEP_HUB_BIND_URL, value: "http://0.0.0.0:8000"}
+            - {name: SAIEP_HUB_BIND_API, value: "http://0.0.0.0:8081"}
+            - {name: SAIEP_HUB_CONNECT_URL, value: "http://jupyterhub.saiep-system.svc.cluster.local:8081"}
+            - {name: SAIEP_NOTEBOOK_IMAGE, value: "${NOTEBOOK_IMAGE}"}
+            - {name: SAIEP_STORAGE_CLASS, value: "${STORAGE_CLASS}"}
+            - {name: SAIEP_NOTEBOOK_STORAGE, value: "${NOTEBOOK_STORAGE}"}
+            - {name: SAIEP_SPAWN_REQUESTS, value: "/srv/jupyterhub/spawn-requests.jsonl"}
+            - {name: SAIEP_NOTEBOOK_LOG, value: "/srv/jupyterhub/notebook-sessions.jsonl"}
+          envFrom:
+            - secretRef: {name: saiep-hub-env}
+          ports:
+            - {name: http, containerPort: 8000}
+            - {name: api, containerPort: 8081}
+          # Probe the Hub API directly; probing through CHP would deadlock
+          # until the Service has a ready endpoint.
+          readinessProbe:
+            httpGet: {path: /hub/health, port: api}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /hub/health, port: api}
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # CHP writes its config under /tmp
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: hub-data, mountPath: /srv/jupyterhub}
+      volumes:
+        - name: hub-data
+          persistentVolumeClaim: {claimName: saiep-hub-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jupyterhub
+  namespace: saiep-system
+  labels: {app: jupyterhub, app.kubernetes.io/part-of: saiep}
+spec:
+  type: NodePort
+  selector: {app: jupyterhub}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      nodePort: 30080
+    - name: api
+      port: 8081
+      targetPort: api

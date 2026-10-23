@@ -25,6 +25,7 @@
                   type="button"
                   class="btn btn-lg btn-danger"
                   style="margin-right: 10px">Arrêter mon serveur</button>
+        {% endif %}
         <a id="start"
            role="button"
            class="btn btn-lg btn-jupyter"
@@ -76,10 +77,10 @@
                 {% endif %}
               </td>
               <td>
-                <button role="button"
-                        type="button"
-                        class="stop-server btn btn-xs btn-danger{% if not spawner.active %} hidden{% endif %}"
-                        id="stop-{{ spawner.name }}">stop</button>
+                <a role="button"
+                   class="stop-server btn btn-xs btn-danger{% if not spawner.active %} hidden{% endif %}"
+                   id="stop-{{ spawner.name }}">stop</a>
+                <a role="button"
                    class="start-server btn btn-xs btn-jupyter {% if spawner.active %}hidden{% endif %}"
                    id="start-{{ spawner.name }}"
                    href="{{ base_url }}spawn/{{ user.name }}/{{ spawner.name }}">start</a>

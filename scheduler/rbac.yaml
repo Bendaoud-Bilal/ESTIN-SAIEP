@@ -81,8 +81,16 @@ rules:
   - apiGroups: [argoproj.io]
     resources: [workflows]
     verbs: [get, list, watch, create, patch]
+  # KubeSpawner notebooks: list/watch across saiep-u-* for its reflectors,
+  # create/delete Pods and PVCs in each user's tenant namespace.
   - apiGroups: [""]
-    resources: [pods, pods/log]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims, services]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [nodes]
     verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -139,7 +147,7 @@ spec:
       - apiGroups: ["", rbac.authorization.k8s.io, networking.k8s.io, argoproj.io]
         apiVersions: ["*"]
         operations: [CREATE, UPDATE, DELETE]
-        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, secrets, workflows]
+        resources: [namespaces, resourcequotas, limitranges, serviceaccounts, rolebindings, networkpolicies, secrets, workflows, pods, persistentvolumeclaims, services]
   matchConditions:
     - name: is-saiep-hub
       expression: request.userInfo.username == 'system:serviceaccount:saiep-system:saiep-hub'
