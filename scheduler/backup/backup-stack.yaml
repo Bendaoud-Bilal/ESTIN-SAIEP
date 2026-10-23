@@ -1,0 +1,266 @@
+# SAIEP backup target. Stored on the physical storage node's dedicated disk.
+# Rendered by saiep_cli.backup.deploy_backup_stack().
+#
+# This is NOT the live platform MinIO. It is a separate S3 repository for
+# Velero/Kopia and etcd/cluster-config snapshots. The storage node remains a
+# normal worker unless the operator explicitly chooses storage-only mode.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: saiep-backup
+  labels:
+    app.kubernetes.io/part-of: saiep
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: saiep-backup-data
+  labels: {app.kubernetes.io/part-of: saiep}
+spec:
+  capacity:
+    storage: ${BACKUP_SIZE}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: saiep-backup-local
+  local:
+    path: ${MOUNT_PATH}/minio
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["${NODE}"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: saiep-backup-minio
+  namespace: saiep-backup
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: saiep-backup-local
+  volumeName: saiep-backup-data
+  resources:
+    requests:
+      storage: ${BACKUP_SIZE}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: saiep-backup-minio-root
+  namespace: saiep-backup
+type: Opaque
+stringData:
+  rootUser: "${ROOT_USER}"
+  rootPassword: "${ROOT_PASSWORD}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saiep-backup-minio
+  namespace: saiep-backup
+  labels: {app: saiep-backup-minio}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: saiep-backup-minio}
+  template:
+    metadata:
+      labels: {app: saiep-backup-minio}
+    spec:
+      nodeSelector:
+        saiep.estin.dz/storage: "true"
+      tolerations:
+        - {key: saiep.estin.dz/storage, operator: Exists, effect: NoSchedule}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: minio
+          image: ${MINIO_IMAGE}
+          args: [server, /data, --address, ":9000"]
+          env:
+            - {name: MINIO_BROWSER, value: "off"}
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootUser}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootPassword}}
+          ports: [{name: s3, containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: s3}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: saiep-backup-minio}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saiep-backup-minio
+  namespace: saiep-backup
+spec:
+  selector: {app: saiep-backup-minio}
+  ports:
+    - {name: s3, port: 9000, targetPort: s3}
+---
+# Creates the Velero bucket. Re-created by the installer on each deploy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: saiep-backup-minio-setup
+  namespace: saiep-backup
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: setup
+          image: ${MC_IMAGE}
+          command: [sh, -c]
+          args:
+            - |
+              set -eu
+              export MC_CONFIG_DIR=/tmp/mc
+              export MC_HOST_backup="http://$$ROOT_USER:$$ROOT_PASSWORD@saiep-backup-minio.saiep-backup.svc.cluster.local:9000"
+              until mc ready backup >/dev/null 2>&1; do sleep 2; done
+              mc mb --ignore-existing backup/saiep-velero
+              echo "backup MinIO bucket saiep-velero ready"
+          env:
+            - name: ROOT_USER
+              valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootUser}}
+            - name: ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootPassword}}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# etcd + control-plane configuration snapshot on the control-plane node.
+# hostNetwork lets etcdctl reach 127.0.0.1:2379; the certs are read-only.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: saiep-etcd-snapshot
+  namespace: saiep-backup
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+            - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+          initContainers:
+            # The etcd image has no shell; call etcdctl directly.
+            - name: snapshot-etcd
+              image: ${ETCD_IMAGE}
+              command: [/usr/local/bin/etcdctl]
+              args:
+                - "--endpoints=https://127.0.0.1:2379"
+                - "--cacert=/etc/kubernetes/pki/etcd/ca.crt"
+                - "--cert=/etc/kubernetes/pki/etcd/server.crt"
+                - "--key=/etc/kubernetes/pki/etcd/server.key"
+                - snapshot
+                - save
+                - /backup/etcd.db
+              env:
+                - {name: ETCDCTL_API, value: "3"}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 512Mi}
+              securityContext:
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+              volumeMounts:
+                - {name: etcd-certs, mountPath: /etc/kubernetes, readOnly: true}
+                - {name: backup, mountPath: /backup}
+            - name: snapshot-config
+              image: ${ALPINE_IMAGE}
+              command: [tar, czf, /backup/kubernetes.tgz, -C, /etc, kubernetes]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 64Mi}
+              securityContext:
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+              volumeMounts:
+                - {name: etcd-certs, mountPath: /etc/kubernetes, readOnly: true}
+                - {name: backup, mountPath: /backup}
+          containers:
+            - name: upload
+              image: ${MC_IMAGE}
+              command: [sh, -c]
+              args:
+                - |
+                  set -eu
+                  export MC_CONFIG_DIR=/tmp/mc
+                  export MC_HOST_backup="http://$$ROOT_USER:$$ROOT_PASSWORD@saiep-backup-minio.saiep-backup.svc.cluster.local:9000"
+                  ts=$(date +%Y%m%dT%H%M%SZ)
+                  mc cp /backup/etcd.db backup/saiep-velero/etcd/$ts.db
+                  mc cp /backup/kubernetes.tgz backup/saiep-velero/cluster-config/$ts.tgz
+                  mc rm --recursive --older-than 30d backup/saiep-velero/etcd || true
+                  mc rm --recursive --older-than 30d backup/saiep-velero/cluster-config || true
+                  echo "etcd and cluster config snapshot uploaded"
+              env:
+                - name: ROOT_USER
+                  valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootUser}}
+                - name: ROOT_PASSWORD
+                  valueFrom: {secretKeyRef: {name: saiep-backup-minio-root, key: rootPassword}}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {cpu: 250m, memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: etcd-certs
+              hostPath: {path: /etc/kubernetes}
+            - name: backup
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}

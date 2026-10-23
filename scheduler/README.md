@@ -89,6 +89,15 @@ KubeSpawner deletes the Pod.
   (`decisions/YYYY/MM/DD/<ts>-<stage>-<id>.json`, versioned bucket, no delete
   right) from a background thread; MinIO outages never block job intake.
 
+## Physical nodes and backup storage
+
+The TUI options 17–21 manage kubeadm physical machines. A storage node joins as
+a normal worker with label `saiep.estin.dz/storage=true` (no taint unless
+storage-only mode is chosen) and runs a separate backup MinIO, Velero/Kopia and
+the `saiep-etcd-snapshot` CronJob from `scheduler/backup/`. It is a single
+backup target, not an HA storage cluster, and does not replace the live
+`saiep-storage` MinIO. See `admin guide.docx` for the disk/restore procedure.
+
 ## Deploy and test
 
 ```bash

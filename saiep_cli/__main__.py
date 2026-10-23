@@ -16,8 +16,8 @@ from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
-from . import REPO_DIR, STATE_DIR, platform, projects, tools
-from .providers import KubeadmProvider, get_provider
+from . import KUBERNETES_MINOR, REPO_DIR, STATE_DIR, backup, nodes, platform, projects, tools
+from .providers import KubeadmProvider, KindProvider, get_provider
 from .runner import CommandError, Runner
 from .state import State
 
@@ -48,6 +48,11 @@ MENU = [
     ('14', 'Construire les images Hub + Notebook', 'build_hub_images'),
     ('15', 'Configurer secrets.env (token + kubeconfig)', 'setup_secrets'),
     ('16', 'Démarrer JupyterHub (cluster + port-forward)', 'run_hub'),
+    ('17', 'Préparer un nœud physique (CPU)', 'prepare_physical'),
+    ('18', 'Préparer un nœud physique (GPU)', 'prepare_physical_gpu'),
+    ('19', 'Rejoindre le cluster (worker)', 'join_cluster'),
+    ('20', 'Arrêter un nœud', 'stop_physical_node'),
+    ('21', 'Rejoindre le cluster comme nœud de stockage', 'storage_node'),
     ('0', 'Quitter', None),
 ]
 
@@ -285,6 +290,111 @@ class Console_:
         self.c.print('[yellow]Si le port 8000 est déjà utilisé, arrêtez l\'ancien Hub local.[/]')
         self.r.run(['kubectl', '-n', 'saiep-system', 'port-forward',
                     'svc/jupyterhub', '8000:8000'], interactive=True, cwd=REPO_DIR)
+
+    def _kind_cluster_exists(self):
+        if not isinstance(self.provider, KindProvider) or not self.r.which('kind'):
+            return False
+        try:
+            return self.provider.exists()
+        except OSError:
+            return False
+
+    def _require_physical(self):
+        if self._kind_cluster_exists():
+            raise RuntimeError(
+                'un cluster kind utilise des conteneurs Docker : les nœuds physiques '
+                'ne peuvent pas le rejoindre. Utilisez un cluster kubeadm.'
+            )
+
+    def prepare_physical(self, gpu=False):
+        self._require_physical()
+        label = 'GPU' if gpu else 'CPU'
+        self.c.print(f'[bold]Préparation d\'un nœud physique {label}[/]')
+        self.c.print('[yellow]Cette opération modifie le système local '
+                     '(swap, modules noyau, containerd, kubelet).[/]')
+        if gpu:
+            self.c.print('[yellow]Le pilote NVIDIA et nvidia-container-toolkit peuvent '
+                         'nécessiter un redémarrage.[/]')
+        if not Confirm.ask(f'Préparer cette machine comme nœud {label} ?', default=True):
+            return
+        minor = Prompt.ask('Version Kubernetes', default=KUBERNETES_MINOR)
+        nodes.prepare_node(self.r, gpu=gpu, k8s_minor=minor, log=self.c.print)
+
+    def prepare_physical_gpu(self):
+        self.prepare_physical(gpu=True)
+
+    def join_cluster(self):
+        self._require_physical()
+        profile = nodes.read_profile(self.r)
+        if not profile:
+            raise RuntimeError('profil absent : lancez d\'abord l\'option 17 ou 18 sur cette machine.')
+        mode = Prompt.ask('Saisie de la jointure', choices=['commande', 'champs'],
+                          default='commande')
+        if mode == 'commande':
+            command = Prompt.ask('Commande kubeadm join complète', password=True)
+        else:
+            endpoint = Prompt.ask('Endpoint control-plane (host:6443)')
+            token = Prompt.ask('Token bootstrap', password=True)
+            ca_hash = Prompt.ask('discovery-token-ca-cert-hash', password=True)
+            command = f'kubeadm join {endpoint} --token {token} --discovery-token-ca-cert-hash {ca_hash}'
+        nodes.join_worker(self.r, command, log=self.c.print)
+
+    def stop_physical_node(self):
+        self._require_physical()
+        mode = Prompt.ask('Mode', choices=['control-plane', 'local'],
+                          default='control-plane')
+        if mode == 'local':
+            self.c.print('[yellow]Le drain doit avoir été fait depuis le control plane.[/]')
+            if not Confirm.ask('Arrêter kubelet et containerd sur cette machine ?', default=False):
+                return
+            poweroff = Confirm.ask('Éteindre la machine ensuite ?', default=False)
+            nodes.stop_local_services(self.r, poweroff=poweroff, log=self.c.print)
+            return
+        node = self.pick('Nœud à arrêter', nodes.worker_nodes(self.r))
+        if node and Confirm.ask(f'Drainer {node} ? Les notebooks et jobs en cours seront interrompus.',
+                                default=False):
+            nodes.drain_node(self.r, node, log=self.c.print)
+
+    def storage_node(self):
+        self._require_physical()
+        mode = Prompt.ask('Mode', choices=['join', 'deploy'], default='join')
+        if mode == 'deploy':
+            node = self.pick('Nœud de stockage', nodes.worker_nodes(self.r))
+            if not node:
+                return
+            mount = Prompt.ask('Point de montage du disque de sauvegarde',
+                               default='/srv/saiep-storage')
+            storage_only = Confirm.ask(
+                'Mode stockage exclusif (taint, pas de workloads normaux) ?', default=False)
+            self.r.run(['kubectl', 'label', 'node', node,
+                        'saiep.estin.dz/storage=true', '--overwrite'])
+            if storage_only:
+                self.r.run(['kubectl', 'taint', 'node', node,
+                            nodes.STORAGE_TAINT, '--overwrite'])
+            if Confirm.ask('Déployer MinIO de sauvegarde + Velero + snapshots etcd ?',
+                           default=True):
+                backup.deploy_backup_stack(self.r, node, mount,
+                                           storage_only=storage_only, log=self.c.print)
+            return
+
+        profile = nodes.read_profile(self.r)
+        if not profile:
+            raise RuntimeError('profil absent : lancez d\'abord l\'option 17 ou 18 sur cette machine.')
+        command = Prompt.ask('Commande kubeadm join complète', password=True)
+        self.c.print(nodes.discover_disks(self.r))
+        device = Prompt.ask('Périphérique du disque de sauvegarde (ex: /dev/sdb)')
+        mount = Prompt.ask('Point de montage', default='/srv/saiep-storage')
+        storage_only = Confirm.ask('Mode stockage exclusif (taint, pas de workloads normaux) ?',
+                                   default=False)
+        if not Confirm.ask(f'Formater/monter {device} sur {mount} si nécessaire puis rejoindre ?',
+                           default=False):
+            return
+        nodes.join_worker(self.r, command, storage=True, storage_only=storage_only,
+                          log=self.c.print)
+        nodes.prepare_data_disk(self.r, device, mount, log=self.c.print)
+        self.c.print('[green]Nœud de stockage prêt.[/]')
+        self.c.print('Sur le control plane, lancez l\'option 21 en mode deploy pour installer '
+                     'MinIO de sauvegarde, Velero et le CronJob etcd.')
 
     def loop(self):
         self.header()

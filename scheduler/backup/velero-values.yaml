@@ -1,0 +1,33 @@
+# Rendered by saiep_cli.backup.deploy_backup_stack().
+# Backup storage is the dedicated MinIO on the storage node; never the live
+# platform MinIO. Kopia/restic node-agent backs up PVC data from every node.
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: saiep-velero
+      default: true
+      config:
+        region: us-east-1
+        s3ForcePathStyle: "true"
+        s3Url: http://saiep-backup-minio.saiep-backup.svc.cluster.local:9000
+  volumeSnapshotLocation: []
+  defaultVolumesToFsBackup: true
+credentials:
+  useSecret: true
+  secretContents:
+    cloud: |
+      [default]
+      aws_access_key_id=${ACCESS_KEY}
+      aws_secret_access_key=${SECRET_KEY}
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  privileged: true
+  tolerations:
+    - key: saiep.estin.dz/storage
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule

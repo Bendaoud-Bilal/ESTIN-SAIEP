@@ -45,6 +45,22 @@ Argo jobs.
 The sizing form controls the Pod's CPU/RAM requests=limits and its maximum
 duration. The home directory is a per-user PVC.
 
+## Physical kubeadm nodes
+Options 17–21 manage real machines (kind cannot accept physical nodes):
+
+```text
+17  Prepare a CPU/no-GPU machine
+18  Prepare a GPU machine (NVIDIA driver/toolkit)
+19  Join the cluster as a worker
+20  Drain/cordon or stop a node
+21  Join as a storage/backup node
+```
+
+The storage node joins as a normal worker, has a dedicated data disk, and runs a
+separate backup MinIO plus Velero/Kopia and etcd snapshots. It is not a
+replacement for the live platform MinIO. See `admin guide.docx` for the
+complete order, disk/backup layout and restore procedure.
+
 ## Configuration
 ```bash
 python -m saiep_cli

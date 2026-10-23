@@ -28,7 +28,7 @@ bash setup_ui.sh                              # SAIEP branding patch (favicons, 
 - Lint/format: `pre-commit run --all-files` (`.pre-commit-config.yaml`).
 
 - SAIEP tests: `./venv/bin/python -m pytest saiep_scheduler scheduler/webhook saiep_cli` (no cluster needed). `saiep_admin.py`/`saiep_jobs.py` handlers have no unit tests.
-- Cluster console: `python -m saiep_cli` (Rich menu; `--dry-run` prints commands). Option 1 installs missing tools and offers to start Docker; 2 verifies; 3 creates a kind (dev) or kubeadm cluster and deploys the SAIEP stack (including Hub + notebook images for kind); 11 redeploys the stack; 12 writes a hub kubeconfig for external tools; 13 starts the Docker daemon; 14 builds the Hub/Notebook images; 15 generates `secrets.env`; 16 port-forwards the in-cluster Hub to `http://127.0.0.1:8000`. State, TLS certs and kubeconfig live in `~/.saiep` (`SAIEP_HOME`).
+- Cluster console: `python -m saiep_cli` (Rich menu; `--dry-run` prints commands). Option 1 installs missing tools and offers to start Docker; 2 verifies; 3 creates a kind (dev) or kubeadm cluster and deploys the SAIEP stack (including Hub + notebook images for kind); 11 redeploys the stack; 12 writes a hub kubeconfig for external tools; 13 starts the Docker daemon; 14 builds the Hub/Notebook images; 15 generates `secrets.env`; 16 port-forwards the in-cluster Hub to `http://127.0.0.1:8000`; 17/18 prepare a physical CPU/GPU kubeadm node; 19 joins a prepared worker; 20 drains/stops a node; 21 joins a storage/backup node (or deploys the backup stack from the control plane). State, TLS certs, node profile (`/etc/saiep/node-profile.json`) and kubeconfig live in `~/.saiep`/`/etc/saiep` (`SAIEP_HOME`).
 - Webhook image (dev): `docker build -t saiep/admission-webhook:dev scheduler/webhook && kind load docker-image saiep/admission-webhook:dev --name saiep`, then `kubectl -n saiep-system rollout restart deploy/saiep-admission`.
 
 ## SAIEP architecture
@@ -62,6 +62,8 @@ Invariants to preserve:
 - Tenant NetworkPolicies come only from `isolator/network/networkpolicy.yaml` (via `tenants.build_network_policies`, I-7). The API server egress rule uses the live `default/kubernetes` EndpointSlice and is re-applied on every `ensure_tenant()` and by CLI "Redéployer la pile SAIEP" — never pin it to a fixed IP.
 - Adding objects to the tenant bundle: bump `tenants.BUNDLE_VERSION` so existing namespaces re-apply it.
 - MinIO: upstream images are gone; Chainguard images pinned by digest. Hub env: `SAIEP_MINIO_ENDPOINT`, `SAIEP_MINIO_ACCESS_KEY/SECRET_KEY` (hub user), `SAIEP_MINIO_EXECUTOR_ACCESS_KEY/SECRET_KEY` (required to provision tenants), printed by CLI option 12.
+
+**Physical storage/backup node:** `saiep_cli/nodes.py` prepares/joins kubeadm workers; `/etc/saiep/node-profile.json` records role/GPU/storage state. `saiep_cli/backup.py` deploys a separate backup MinIO, Velero/Kopia and etcd/control-plane snapshot CronJob from `scheduler/backup/`. The storage node is a normal worker (label `saiep.estin.dz/storage=true`, no default taint) and does not replace the live MinIO. Single storage node = SPOF; no HA claim.
 
 Security Layer (Kyverno, organisation RBAC, Zero Trust) is **disabled for this version** — see `security/README.md`; the scheduler's own guards (admission webhook, tenant RBAC, `saiep-hub-tenant-scope` policy) stay on.
 

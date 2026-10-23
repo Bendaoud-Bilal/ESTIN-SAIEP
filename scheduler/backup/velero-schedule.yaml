@@ -1,0 +1,17 @@
+# Daily Velero backup of SAIEP Kubernetes objects and PVC data.
+# kube-system is excluded; etcd snapshots cover cluster-level recovery.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: saiep-daily
+  namespace: velero
+spec:
+  schedule: "0 2 * * *"
+  template:
+    ttl: 720h0m0s
+    storageLocation: default
+    excludedNamespaces:
+      - kube-system
+      - velero
+      - saiep-backup
+    defaultVolumesToFsBackup: true
