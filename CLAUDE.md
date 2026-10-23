@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Operator-facing runbook: `admin guide.docx` (TUI roles, menu order, troubleshooting).
+Operator-facing runbook: `../ESTIN-SAIEP-docs/ESTIN-SAIEP-docs/admin guide.docx` (TUI roles, menu order, troubleshooting).
 
 ## What this repo is
 
@@ -19,7 +19,7 @@ pip install jupyterlab notebook Pillow jupyterhub-nativeauthenticator docker kub
 bash setup_ui.sh                              # SAIEP branding patch (favicons, JupyterLab CSS/title) — rerun after reinstalling venv
 ```
 
-- Run the hub: it is a Kubernetes Deployment (`saiep-system/jupyterhub`) created by `saiep_cli` option 3/11. `./start-hub.sh` only opens a local port-forward to `http://127.0.0.1:8000`; use `python -m saiep_cli` option 16 for the same thing. The old local `venv/bin/jupyterhub` mode is no longer supported.
+- Run the hub: it is a Kubernetes Deployment (`saiep-system/jupyterhub`) created by `saiep_cli` option 4/20. `./start-hub.sh` only opens a local port-forward to `http://127.0.0.1:8000`; use `python -m saiep_cli` option 7 for the same thing. The old local `venv/bin/jupyterhub` mode is no longer supported.
 - Run the hub for generic upstream testing (no admin privileges, dummy auth): `jupyterhub -f testing/jupyterhub_config.py` (upstream only; not the SAIEP in-cluster config).
 - Python tests (upstream suite): `pytest jupyterhub/tests` · single test: `pytest jupyterhub/tests/test_api.py::test_name` · browser tests (excluded by default via `-m 'not browser'`): `pytest -m browser`. `pytest.ini` runs asyncio tests in auto mode.
 - JS tests: `npm test` (karma) · admin React UI (`jsx/`): `npm run jsx:install-run <script>` (e.g. `test`, `build`, `lint`).
@@ -28,7 +28,7 @@ bash setup_ui.sh                              # SAIEP branding patch (favicons, 
 - Lint/format: `pre-commit run --all-files` (`.pre-commit-config.yaml`).
 
 - SAIEP tests: `./venv/bin/python -m pytest saiep_scheduler scheduler/webhook saiep_cli` (no cluster needed). `saiep_admin.py`/`saiep_jobs.py` handlers have no unit tests.
-- Cluster console: `python -m saiep_cli` (Rich menu; `--dry-run` prints commands). Option 1 installs missing tools and offers to start Docker; 2 verifies; 3 creates a kind (dev) or kubeadm cluster and deploys the SAIEP stack (including Hub + notebook images for kind); 11 redeploys the stack; 12 writes a hub kubeconfig for external tools; 13 starts the Docker daemon; 14 builds the Hub/Notebook images; 15 generates `secrets.env`; 16 port-forwards the in-cluster Hub to `http://127.0.0.1:8000`; 17/18 prepare a physical CPU/GPU kubeadm node; 19 joins a prepared worker; 20 drains/stops a node; 21 joins a storage/backup node (or deploys the backup stack from the control plane). State, TLS certs, node profile (`/etc/saiep/node-profile.json`) and kubeconfig live in `~/.saiep`/`/etc/saiep` (`SAIEP_HOME`).
+- Cluster console: `python -m saiep_cli` (Rich menu; `--dry-run` prints commands). The menu is ordered as an execution flow: 1 starts Docker; 2 installs missing tools; 3 verifies; 4 creates kind/kubeadm and deploys the SAIEP stack; 5 builds Hub/Notebook images; 6 generates `secrets.env`; 7 port-forwards the in-cluster Hub; 8 adds nodes; 9/10 prepare CPU/GPU physical nodes; 11 joins a worker; 12 joins/deploys a storage/backup node; 13 drains/stops a node; 14 deploys applications; 15–18 manage start/stop; 19 uninstalls a project; 20 redeploys the stack; 21 writes a hub kubeconfig. State, TLS certs, node profile (`/etc/saiep/node-profile.json`) and kubeconfig live in `~/.saiep`/`/etc/saiep` (`SAIEP_HOME`).
 - Webhook image (dev): `docker build -t saiep/admission-webhook:dev scheduler/webhook && kind load docker-image saiep/admission-webhook:dev --name saiep`, then `kubectl -n saiep-system rollout restart deploy/saiep-admission`.
 
 ## SAIEP architecture
@@ -61,7 +61,7 @@ Invariants to preserve:
 - Archived-log keys come from WorkflowTaskResults (writable by the tenant pod): the hub only fetches keys under `<namespace>/<workflow>/` in `saiep-artifacts`.
 - Tenant NetworkPolicies come only from `isolator/network/networkpolicy.yaml` (via `tenants.build_network_policies`, I-7). The API server egress rule uses the live `default/kubernetes` EndpointSlice and is re-applied on every `ensure_tenant()` and by CLI "Redéployer la pile SAIEP" — never pin it to a fixed IP.
 - Adding objects to the tenant bundle: bump `tenants.BUNDLE_VERSION` so existing namespaces re-apply it.
-- MinIO: upstream images are gone; Chainguard images pinned by digest. Hub env: `SAIEP_MINIO_ENDPOINT`, `SAIEP_MINIO_ACCESS_KEY/SECRET_KEY` (hub user), `SAIEP_MINIO_EXECUTOR_ACCESS_KEY/SECRET_KEY` (required to provision tenants), printed by CLI option 12.
+- MinIO: upstream images are gone; Chainguard images pinned by digest. Hub env: `SAIEP_MINIO_ENDPOINT`, `SAIEP_MINIO_ACCESS_KEY/SECRET_KEY` (hub user), `SAIEP_MINIO_EXECUTOR_ACCESS_KEY/SECRET_KEY` (required to provision tenants), printed by CLI option 21.
 
 **Physical storage/backup node:** `saiep_cli/nodes.py` prepares/joins kubeadm workers; `/etc/saiep/node-profile.json` records role/GPU/storage state. `saiep_cli/backup.py` deploys a separate backup MinIO, Velero/Kopia and etcd/control-plane snapshot CronJob from `scheduler/backup/`. The storage node is a normal worker (label `saiep.estin.dz/storage=true`, no default taint) and does not replace the live MinIO. Single storage node = SPOF; no HA claim.
 

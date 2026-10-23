@@ -140,7 +140,8 @@ def default_url(handler):
         return '/hub/admin'
     if user.name == 'litan':
         return '/hub/authorize'
-    return '/hub/spawn'
+    # After login: sizing form -> Mes calculs -> notebook.
+    return '/hub/spawn?next=%2Fhub%2Fjobs'
 
 c.JupyterHub.default_url = default_url
 

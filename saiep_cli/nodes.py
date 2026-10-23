@@ -111,7 +111,7 @@ def prepare_node(runner, *, gpu=False, k8s_minor='v1.36', log=print):
             raise NodeError('nvidia-ctk absent : installez nvidia-container-toolkit.')
         if requires_reboot:
             raise NodeError('pilote NVIDIA installé. Redémarrez la machine, puis relancez '
-                            'l\'option 18 pour vérifier le GPU avant de rejoindre le cluster.')
+                            'l\'option 10 pour vérifier le GPU avant de rejoindre le cluster.')
 
     tools.kubeadm_prepare_node(runner, k8s_minor)
 
@@ -130,7 +130,7 @@ def prepare_node(runner, *, gpu=False, k8s_minor='v1.36', log=print):
     write_profile(runner, profile)
     log(f'[green]Nœud préparé ({k8s_minor}). Profil : {profile_path()}[/]')
     log('Sur le control plane : option 4 pour obtenir la commande de jointure, '
-        'puis option 19 sur cette machine.')
+        'puis option 11 sur cette machine.')
     return profile
 
 
@@ -211,11 +211,11 @@ def join_worker(runner, join_command, *, storage=False, storage_only=False, log=
     """Join this machine using a validated kubeadm worker command."""
     profile = read_profile(runner)
     if not profile:
-        raise NodeError(f'profil absent ({profile_path()}). Lancez d\'abord l\'option 17 ou 18.')
+        raise NodeError(f'profil absent ({profile_path()}). Lancez d\'abord l\'option 9 ou 10.')
     if profile.get('requires_reboot'):
         raise NodeError('un redémarrage est requis avant la jointure.')
     if profile.get('gpu') and not profile.get('driver_ready'):
-        raise NodeError('le pilote NVIDIA n\'est pas prêt ; relancez l\'option 18.')
+        raise NodeError('le pilote NVIDIA n\'est pas prêt ; relancez l\'option 10.')
     args = validate_join_command(join_command)
     log(f"$ sudo {redact_join(args)}")
     runner.run(['sudo', *args], capture=False, echo=False)
@@ -246,7 +246,7 @@ def drain_node(runner, node, *, log=print):
                 '--force', '--timeout=300s'], capture=False)
     runner.run(['kubectl', 'cordon', node], check=False)
     log(f'[green]{node} drainé et cordonné. Le Node n\'est pas supprimé.[/]')
-    log('Pour arrêter la machine : option 20 en mode local, ou :')
+    log('Pour arrêter la machine : option 13 en mode local, ou :')
     log('  sudo systemctl stop kubelet containerd')
     log('  sudo poweroff   # seulement après confirmation')
 

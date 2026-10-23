@@ -32,27 +32,27 @@ BANNER = r"""
 NAVY, RED = '#34495e', '#e54c3f'
 
 MENU = [
-    ('1', 'Installation initiale (outils manquants)', 'fresh_install'),
-    ('2', "Vérifier l'installation", 'verify'),
-    ('3', 'Créer le cluster (+ pile SAIEP)', 'create_cluster'),
-    ('4', 'Ajouter des nœuds au cluster', 'add_nodes'),
-    ('5', 'Affecter des pods à un nœud (GitHub / local / terminal)', 'assign'),
-    ('6', 'Démarrer tout le cluster', 'run_all'),
-    ('7', 'Démarrer un nœud ou un projet', 'run_one'),
-    ('8', 'Arrêter le cluster', 'stop_all'),
-    ('9', 'Arrêter un nœud ou un projet', 'stop_one'),
-    ('10', 'Désinstaller un projet (et ses dépendances)', 'uninstall'),
-    ('11', 'Redéployer la pile SAIEP', 'deploy_stack'),
-    ('12', 'Générer le kubeconfig du hub', 'hub_kubeconfig'),
-    ('13', 'Démarrer Docker (démon)', 'start_docker'),
-    ('14', 'Construire les images Hub + Notebook', 'build_hub_images'),
-    ('15', 'Configurer secrets.env (token + kubeconfig)', 'setup_secrets'),
-    ('16', 'Démarrer JupyterHub (cluster + port-forward)', 'run_hub'),
-    ('17', 'Préparer un nœud physique (CPU)', 'prepare_physical'),
-    ('18', 'Préparer un nœud physique (GPU)', 'prepare_physical_gpu'),
-    ('19', 'Rejoindre le cluster (worker)', 'join_cluster'),
-    ('20', 'Arrêter un nœud', 'stop_physical_node'),
-    ('21', 'Rejoindre le cluster comme nœud de stockage', 'storage_node'),
+    ('1', 'Démarrer Docker (démon)', 'start_docker'),
+    ('2', 'Installation initiale (outils manquants)', 'fresh_install'),
+    ('3', "Vérifier l'installation", 'verify'),
+    ('4', 'Créer le cluster (+ pile SAIEP)', 'create_cluster'),
+    ('5', 'Construire les images Hub + Notebook', 'build_hub_images'),
+    ('6', 'Configurer secrets.env (token + kubeconfig)', 'setup_secrets'),
+    ('7', 'Démarrer JupyterHub (cluster + port-forward)', 'run_hub'),
+    ('8', 'Ajouter des nœuds au cluster', 'add_nodes'),
+    ('9', 'Préparer un nœud physique (CPU)', 'prepare_physical'),
+    ('10', 'Préparer un nœud physique (GPU)', 'prepare_physical_gpu'),
+    ('11', 'Rejoindre le cluster (worker)', 'join_cluster'),
+    ('12', 'Rejoindre le cluster comme nœud de stockage', 'storage_node'),
+    ('13', 'Arrêter un nœud', 'stop_physical_node'),
+    ('14', 'Affecter des pods à un nœud (GitHub / local / terminal)', 'assign'),
+    ('15', 'Démarrer tout le cluster', 'run_all'),
+    ('16', 'Démarrer un nœud ou un projet', 'run_one'),
+    ('17', 'Arrêter le cluster', 'stop_all'),
+    ('18', 'Arrêter un nœud ou un projet', 'stop_one'),
+    ('19', 'Désinstaller un projet (et ses dépendances)', 'uninstall'),
+    ('20', 'Redéployer la pile SAIEP', 'deploy_stack'),
+    ('21', 'Générer le kubeconfig du hub', 'hub_kubeconfig'),
     ('0', 'Quitter', None),
 ]
 
@@ -275,7 +275,7 @@ class Console_:
                     self.c.print('[green]Kubeconfig et variables MinIO ajoutés à secrets.env.[/]')
         else:
             self.c.print('[yellow]Cluster non joignable : token seul configuré. '
-                         'Relancez cette option après l\'option 3.[/]')
+                         'Relancez cette option après l\'option 4.[/]')
         with open(path, 'w') as fh:
             fh.write(text)
         os.chmod(path, 0o600)
@@ -284,7 +284,7 @@ class Console_:
     def run_hub(self):
         if not self.r.ok(['kubectl', '-n', 'saiep-system', 'get', 'deploy', 'jupyterhub'],
                          echo=False):
-            raise RuntimeError('Hub cluster absent : lancez d\'abord l\'option 3 ou 11.')
+            raise RuntimeError('Hub cluster absent : lancez d\'abord l\'option 4 ou 20.')
         self.c.print('[green]Hub cluster : http://127.0.0.1:8000 — '
                      'Ctrl-C pour arrêter le port-forward.[/]')
         self.c.print('[yellow]Si le port 8000 est déjà utilisé, arrêtez l\'ancien Hub local.[/]')
@@ -327,7 +327,7 @@ class Console_:
         self._require_physical()
         profile = nodes.read_profile(self.r)
         if not profile:
-            raise RuntimeError('profil absent : lancez d\'abord l\'option 17 ou 18 sur cette machine.')
+            raise RuntimeError('profil absent : lancez d\'abord l\'option 9 ou 10 sur cette machine.')
         mode = Prompt.ask('Saisie de la jointure', choices=['commande', 'champs'],
                           default='commande')
         if mode == 'commande':
@@ -379,7 +379,7 @@ class Console_:
 
         profile = nodes.read_profile(self.r)
         if not profile:
-            raise RuntimeError('profil absent : lancez d\'abord l\'option 17 ou 18 sur cette machine.')
+            raise RuntimeError('profil absent : lancez d\'abord l\'option 9 ou 10 sur cette machine.')
         command = Prompt.ask('Commande kubeadm join complète', password=True)
         self.c.print(nodes.discover_disks(self.r))
         device = Prompt.ask('Périphérique du disque de sauvegarde (ex: /dev/sdb)')
@@ -393,7 +393,7 @@ class Console_:
                           log=self.c.print)
         nodes.prepare_data_disk(self.r, device, mount, log=self.c.print)
         self.c.print('[green]Nœud de stockage prêt.[/]')
-        self.c.print('Sur le control plane, lancez l\'option 21 en mode deploy pour installer '
+        self.c.print('Sur le control plane, lancez l\'option 12 en mode deploy pour installer '
                      'MinIO de sauvegarde, Velero et le CronJob etcd.')
 
     def loop(self):

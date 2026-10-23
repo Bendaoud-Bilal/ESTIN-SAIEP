@@ -65,14 +65,14 @@ def load_documents(source, runner, workdir):
         if _is_platform_repo(workdir):
             raise ValueError(
                 'ce dépôt est la plateforme ESTIN-SAIEP elle-même, pas une application. '
-                'Utilisez l\'option 3 pour la créer ou l\'option 11 pour la redéployer.'
+                'Utilisez l\'option 4 pour la créer ou l\'option 20 pour la redéployer.'
             )
         texts += _read_tree(workdir)
     elif os.path.isdir(source):
         if _is_platform_repo(source):
             raise ValueError(
                 'ce chemin est la plateforme ESTIN-SAIEP elle-même, pas une application. '
-                'Utilisez l\'option 3 pour la créer ou l\'option 11 pour la redéployer.'
+                'Utilisez l\'option 4 pour la créer ou l\'option 20 pour la redéployer.'
             )
         texts += _read_tree(source)
     else:

@@ -29,6 +29,6 @@ c.JupyterHub.cookie_secret_file = os.environ.get(
     'SAIEP_HUB_COOKIE_SECRET', '/srv/jupyterhub/jupyterhub-dev-cookie-secret'
 )
 c.JupyterHub.extra_handlers = saiep_jobs.job_handlers()
-c.JupyterHub.default_url = '/hub/jobs'
+c.JupyterHub.default_url = '/hub/spawn?next=%2Fhub%2Fjobs'
 
 saiep_hub_config.configure(c, repo)

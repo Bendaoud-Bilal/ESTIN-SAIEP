@@ -26,10 +26,11 @@
                   class="btn btn-lg btn-danger"
                   style="margin-right: 10px">Arrêter mon serveur</button>
         {% endif %}
+        {% set start_href = url if default_server.active else url + ('&' if '?' in url else '?') + 'next=%2Fhub%2Fjobs' %}
         <a id="start"
            role="button"
            class="btn btn-lg btn-jupyter"
-           href="{{ url }}">
+           href="{{ start_href }}">
           {% if not default_server.active %}Démarrer{% endif %}
           Mon Serveur
         </a>

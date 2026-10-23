@@ -196,6 +196,14 @@
           return b;
         }
 
+        function link(label, cls, href) {
+          const a = document.createElement("a");
+          a.className = "btn btn-xs btn-sm me-1 " + cls;
+          a.textContent = label;
+          a.href = href;
+          return a;
+        }
+
         function render(jobs) {
           rows.replaceChildren();
           if (!jobs.length) {
@@ -218,6 +226,10 @@
             cell(tr, job.cpu + " vCPU · " + job.memory + (job.gpu !== "0" ? " · " + job.gpu + " GPU" : ""));
             cell(tr, job.created ? new Date(job.created).toLocaleString("fr-FR") : "");
             const actions = cell(tr, "");
+            if (job.kind === "notebook" && job.user) {
+              actions.appendChild(link("Notebook", "btn-outline-primary",
+                window.location.origin + "/user/" + encodeURIComponent(job.user) + "/lab"));
+            }
             actions.appendChild(button("Journal", "btn-outline-secondary", function () { showLogs(job.name); }));
             if (job.phase === "Pending" || job.phase === "Running") {
               actions.appendChild(button("Arrêter", "btn-danger", function () { stop(job.name); }));

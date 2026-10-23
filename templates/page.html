@@ -143,24 +143,32 @@
               {% if user %}
                 {% block nav_bar_left_items %}
                   <li class="nav-item">
-                    <a class="nav-link" href="{{ base_url }}home">Home</a>
+                    <a class="nav-link" href="{{ base_url }}home">Accueil</a>
+                  </li>
+                  <li class="nav-item">
+                    <a class="nav-link" href="{{ base_url }}jobs">Mes calculs</a>
+                  </li>
+                  <li class="nav-item">
+                    <a class="nav-link" href="{{ user.url }}lab">Notebook</a>
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="{{ base_url }}token">Token</a>
                   </li>
-                  <li class="nav-item">
-                    <a class="nav-link" href="{{ base_url }}jobs">Calculs</a>
-                  </li>
-                  {% if 'admin-ui' in parsed_scopes %}
+                  {% if user.admin %}
+                    <li class="nav-item">
+                      <a class="nav-link" href="{{ base_url }}authorize">Autorisation</a>
+                    </li>
                     <li class="nav-item">
                       <a class="nav-link" href="{{ base_url }}admin">Admin</a>
                     </li>
-                    <li class="nav-item">
-                      <a class="nav-link" href="{{ base_url }}swarm">Ressources</a>
-                    </li>
-                    <li class="nav-item">
-                      <a class="nav-link" href="{{ base_url }}monitoring">Monitoring</a>
-                    </li>
+                    {% if 'admin-ui' in parsed_scopes %}
+                      <li class="nav-item">
+                        <a class="nav-link" href="{{ base_url }}swarm">Ressources</a>
+                      </li>
+                      <li class="nav-item">
+                        <a class="nav-link" href="{{ base_url }}monitoring">Monitoring</a>
+                      </li>
+                    {% endif %}
                   {% endif %}
                   {% if services %}
                     <li class="nav-item dropdown">

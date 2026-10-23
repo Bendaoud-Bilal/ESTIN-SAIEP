@@ -4,7 +4,7 @@ JupyterHub now runs as a Kubernetes Deployment. Each notebook is a KubeSpawner P
 in `saiep-u-<user>`; there is no local notebook process.
 
 For the full operator runbook, menu reference, execution order and
-troubleshooting, see **[admin guide.docx](admin%20guide.docx)**.
+troubleshooting, see **[admin guide.docx](../ESTIN-SAIEP-docs/ESTIN-SAIEP-docs/admin%20guide.docx)**.
 
 ## Requirements
 - Python 3.12 (for the CLI/tests)
@@ -14,8 +14,8 @@ troubleshooting, see **[admin guide.docx](admin%20guide.docx)**.
 ## Deploy
 ```bash
 python -m saiep_cli
-# 3  create the cluster and deploy the SAIEP stack
-# 11 redeploy the stack after code changes
+# 4  create the cluster and deploy the SAIEP stack
+# 20 redeploy the stack after code changes
 ```
 
 The stack deployment builds:
@@ -28,7 +28,7 @@ and loads them into kind. For kubeadm, push the images to a registry and set
 ## Access
 ```bash
 python -m saiep_cli
-# 16 start the local port-forward
+# 7 start the local port-forward
 ```
 
 Then open:
@@ -46,14 +46,14 @@ The sizing form controls the Pod's CPU/RAM requests=limits and its maximum
 duration. The home directory is a per-user PVC.
 
 ## Physical kubeadm nodes
-Options 17–21 manage real machines (kind cannot accept physical nodes):
+Options 9–13 manage real machines (kind cannot accept physical nodes):
 
 ```text
-17  Prepare a CPU/no-GPU machine
-18  Prepare a GPU machine (NVIDIA driver/toolkit)
-19  Join the cluster as a worker
-20  Drain/cordon or stop a node
-21  Join as a storage/backup node
+9   Prepare a CPU/no-GPU machine
+10  Prepare a GPU machine (NVIDIA driver/toolkit)
+11  Join the cluster as a worker
+12  Join as a storage/backup node
+13  Drain/cordon or stop a node
 ```
 
 The storage node joins as a normal worker, has a dedicated data disk, and runs a
@@ -64,7 +64,7 @@ complete order, disk/backup layout and restore procedure.
 ## Configuration
 ```bash
 python -m saiep_cli
-# 15 write secrets.env (Prometheus token, MinIO credentials)
+# 6 write secrets.env (Prometheus token, MinIO credentials)
 ```
 
 The in-cluster Hub receives its environment from the `saiep-hub-env` Secret,
